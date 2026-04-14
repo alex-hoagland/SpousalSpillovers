@@ -1,0 +1,1790 @@
+---
+title: "Dynamic Model"
+author: "Alex Hoagland"
+date: "`r Sys.Date()`"
+output: powerpoint_presentation
+---
+
+```{r setup, include=FALSE}
+# Note: this model matches on the intensive margin only 
+knitr::opts_chunk$set(echo = FALSE)
+
+set.seed(20250212) # set seed for random draws
+
+library(tidyverse) # call the relevant library
+library(gmm) # For GMM estimation
+library(EnvStats) # for type 1 distribution
+library(broom) # for RD regression
+library(purrr) # for parallelizing
+library(furrr) # for parallelizing
+library(pracma) # for numerical integration
+library(Rcpp) # for CS loops (to go faster?)
+library(future)
+library(parallel)
+
+# path <- "C:\\Users\\pc\\Dropbox\\Spouses in Medicare\\Model\\" # for Columbus machine
+path <- "C:\\Users\\alexh\\Dropbox\\Spouses in Medicare\\Model\\" # TO machine
+```
+
+## Model Estimation (left out of slide compiling)
+-     Note that Eliason et al. used the first set of moments to construct their likelihood function
+-     By using GMM, we allow for the additional moment of the RD estimate. 
+-     The parameters to estimate are the $\lambda$ parameters, $\alpha$, $\omega$, and $\sigma_\varepsilon$.
+
+```{r gmm-estimation,  eval=FALSE}
+# Parameters to specify
+N <- 5000 # how many individuals to sample
+treated <- TRUE # are we doing this for treated group or control group? 
+# note that per Eliason et al., delta should be 0.99986 for daily rate when annual discount rate is 0.95. So it's basically 1
+
+# A needed function to use a given person's shocks to return outcomes
+simulate_person <- function(p, simdata, timevars, omega, myscale) { 
+  # Local copy with that person's shocks and inflate by the scale
+  local_timevars <- simdata %>% filter(id == p) %>% select(eps_d, eps_k, t) %>% 
+    left_join(timevars, by = "t") %>% 
+    mutate(eps_d = myscale*eps_d, 
+           eps_k = myscale*eps_k, # transform shocks accordingly
+           EV = ifelse(t == 100, omega, NA))
+  
+  for (d in 99:1) { # backward loop
+    local_timevars$EV[local_timevars$t == d] <- 
+      local_timevars$u[local_timevars$t == d + 1] + 
+      log(exp(1 * local_timevars$EV[local_timevars$t == d + 1]) + 1)
+  }
+  local_timevars$V <- NA
+  local_timevars$V[local_timevars$t == 100] <- local_timevars$u[local_timevars$t == 100]
+  
+  for (d in 99:1) { # backward loop
+    local_timevars$V[local_timevars$t == d] <- 
+      local_timevars$u[local_timevars$t == d] + 
+      pmax(local_timevars$eps_k[local_timevars$t == d] + 1 * local_timevars$EV[local_timevars$t == d + 1],
+           local_timevars$eps_d[local_timevars$t == d])
+  }
+  
+  # Calculate cumulative value
+  local_timevars <- local_timevars %>% mutate(cumV = cumsum(V))
+  
+  # Find the day that maximizes cumulative value
+  exit_day <- which.max(local_timevars$cumV)
+  
+  # If value on the first day is negative, then return 0 instead
+  # exit_day <- ifelse(local_timevars$V[1] < 0, 0, exit_day)
+  
+  # If value is infinite, return corner solution
+  exit_day <- ifelse(local_timevars$V[1] == Inf, 100, exit_day)
+  return(exit_day)
+}
+
+# Load observed moments
+observed_moments <- read_csv(paste0(path, "ObservedMoments.csv", sep="")
+names(observed_moments)[1] <- "exit_day"
+
+# Change moments to intensive margins
+observed_moments <- observed_moments %>% 
+  filter(exit_day > 0) %>% 
+  mutate(frac_observed_treated = frac_observed_treated / sum(frac_observed_treated),
+         frac_observed_control = frac_observed_control / sum(frac_observed_control))
+
+ # moments need the average, median, and SD of LOS for both treated and control groups 
+  if (treated == TRUE) {
+    mean_cond_treat <- sum(observed_moments$exit_day*observed_moments$frac_observed_treated)
+    med_cond_treat <- observed_moments$exit_day[which.max(cumsum(observed_moments$frac_observed_treated) >= 0.5)]
+    sd_cond_treat <- sqrt(sum(observed_moments$frac_observed_treated * (observed_moments$exit_day - mean_cond_treat)^2))
+   
+    rd_moment <- observed_moments %>%
+      mutate(past_cutoff = ifelse(exit_day > 21, 1, 0)) %>%
+      filter(abs(exit_day - 22) < 11.22, exit_day != 22) %>%
+      mutate(
+        distance = exit_day - 22,
+        weight = 1 - abs(distance) / 11.22
+      ) %>%
+      group_map(~ {
+        model <- lm(frac_observed_treated ~ past_cutoff, data = .x, weights = weight)
+        coef(model)["past_cutoff"]
+      }) %>%
+      unlist()  # if you want a plain numeric vector
+    
+  } else {
+    mean_cond_control <- sum(observed_moments$exit_day*observed_moments$frac_observed_control)
+    med_cond_control <- observed_moments$exit_day[which.max(cumsum(observed_moments$frac_observed_control) >= 0.5)]
+    sd_cond_control <- sqrt(sum(observed_moments$frac_observed_control * (observed_moments$exit_day - mean_cond_control)^2))
+    
+    rd_moment <- observed_moments %>%
+      mutate(past_cutoff = ifelse(exit_day > 21, 1, 0)) %>%
+      filter(abs(exit_day - 22) < 11.22, exit_day != 22) %>%
+      mutate(
+        distance = exit_day - 22,
+        weight = 1 - abs(distance) / 11.22
+      ) %>%
+      group_map(~ {
+        model <- lm(frac_observed_control ~ past_cutoff, data = .x, weights = weight)
+        coef(model)["past_cutoff"]
+      }) %>%
+      unlist()  # if you want a plain numeric vector
+
+  }
+
+# make a dataset of N individuals with unique shocks 
+simdata <- expand_grid(
+  id = 1:N,
+  t = 1:100
+) %>%
+  arrange(id, t) %>% 
+  mutate(eps_k = revd(n = (100*N), scale=1), 
+         eps_d = revd(n = (100*N), scale=1)) 
+  # note: we aren't using any individual characteristics here, so these can be simulated individuals who differ only in their shocks 
+
+# Moment function 
+simulate_moments <- function(structparams, data=simdata) {
+  cat("Testing parameters:", structparams, "\n")  # to see progress
+  
+  l0 <- structparams[1] #scaling
+  l1 <- structparams[2]/1000 #scaling
+  l2 <- structparams[3]/1000 #scaling
+  l3 <- structparams[4]/1000 # scaling
+  alpha <- structparams[5]
+  omega <- structparams[6]
+  
+  # make a dataframe with 100 periods and a variable t
+  timevars <- data.frame(t = 1:100) %>%
+    mutate(lambda = l0 + l1*t + l2*t^2 + l3*t^3) %>%
+    # mutate(ubump = ifelse(t == 21, structparams[8], 
+    #                       ifelse(t == 22, structparams[9], 
+    #                              ifelse(t == 23, structparams[10], 0)))) %>%
+    mutate(p = ifelse(t < 22, 1e-5, 37.5),
+           omega = omega,
+           delta = 1,
+           alpha = alpha,
+           u = lambda + alpha*p ) # + ubump)
+  
+  # solve the model for each individual with different shocks in parallel
+   pred_moments <- unique(simdata$id) %>% future_map_int(
+    ~simulate_person(.x, simdata, timevars, omega, myscale=structparams[7]),
+    .options = furrr_options(seed = TRUE)
+  )
+  pred_moments <- tibble(id = unique(simdata$id), exit_day = pred_moments)
+   
+  # Then you can calculate the moments
+  moments <- pred_moments %>% group_by(exit_day) %>% summarize(n = n()) %>% 
+    mutate(p = n/N) %>% # fill in with 0s if needed
+    right_join(data.frame(exit_day = 1:100), by = "exit_day") %>% 
+    mutate(p = ifelse(is.na(p), 0, p))
+  
+  rd_moment1 <- moments %>%
+      mutate(past_cutoff = ifelse(exit_day > 21, 1, 0)) %>%
+      filter(abs(exit_day - 22) < 11.22, exit_day != 22) %>%
+      mutate(
+        distance = exit_day - 22,
+        weight = 1 - abs(distance) / 11.22
+      ) %>%
+      group_map(~ {
+        model <- lm(p ~ past_cutoff, data = .x, weights = weight)
+        coef(model)["past_cutoff"]
+      }) %>%
+      unlist()  # if you want a plain numeric vector
+  
+  # Now construct moments as the difference between these outputs and the actual moments in Medicare data
+  if (treated == TRUE) { 
+    moments <- moments %>% left_join(observed_moments, by = "exit_day") %>% 
+    mutate(moment = abs(p - frac_observed_treated)) %>% filter(exit_day <= 40) %>% 
+      complete(exit_day = 1:40, fill = list(moment = 0))  # ensures exactly 40 elements
+      
+    # ggplot(moments, aes(x=exit_day)) +
+    #   geom_point(aes(y=p, color="Predicted"), size=3) +
+    #   geom_point(aes(y=frac_observed_control, color="Actual"), size=3) +
+    #   theme_minimal() +
+    #   labs(x="Day in SNF", y = "%", subtitle="Sick Spouse Group", color=NULL) +
+    #   geom_vline(xintercept = 21.5, linetype="dashed") +
+    #   theme(legend.position="inside",
+    #       legend.position.inside = c(0.01, 0.99),       # top-left corner inside the plot area
+    #       legend.justification = c("left", "top"))
+    
+    # ggplot(moments, aes(x=exit_day)) + geom_point(aes(y=p),color='skyblue') +
+    #   geom_point(aes(y=frac_observed_treated),color="maroon")
+    # ggplot(moments, aes(x=exit_day)) + geom_point(aes(y=moment),color='forestgreen') + 
+    #   geom_hline(yintercept = 0)
+  }
+  else {
+  moments <- moments %>% left_join(observed_moments, by = "exit_day") %>% 
+    mutate(moment = abs(p - frac_observed_control)) %>% filter(exit_day <= 40) %>%
+    complete(exit_day = 1:40, fill = list(moment = 0))  # ensures exactly 40 elements
+
+  # ggplot(moments, aes(x=exit_day)) +
+  #   geom_point(aes(y=p, color="Predicted"), size=3) +
+  #   geom_point(aes(y=frac_observed_control, color="Actual"), size=3) +
+  #   theme_minimal() +
+  #   labs(x="Day in SNF", y = "%", subtitle="Healthy Spouse Group", color=NULL) +
+  #   geom_vline(xintercept = 21.5, linetype="dashed") +
+  #   theme(legend.position="inside",
+  #       legend.position.inside = c(0.01, 0.99),       # top-left corner inside the plot area
+  #       legend.justification = c("left", "top"))
+  #  ggplot(moments, aes(x=exit_day)) +
+  #    geom_point(aes(y=moment), color='forestgreen') +
+  #    geom_hline(yintercept = 0)
+  }
+  
+  moments <- moments %>% pull(moment)
+  moments[41] <- abs(rd_moment-rd_moment1)
+  return(moments)
+}
+
+moment_function <- function(structparams, data=simdata) {
+  # Wrap the call to compute_f in tryCatch
+  result <- tryCatch({
+    # Attempt to compute the moments normally
+    mythetavec <- structparams 
+    simulate_moments(mythetavec, data=simdata)
+  }, error = function(e) {
+    # In case of an error, return a penalty value.
+    penalty_value <- 1e10
+    rep(penalty_value, 41) # change to reflect number of moments we have
+  })
+  
+  return(result)
+}
+###########################################################
+
+
+##### Estimate using GMM #####
+# structparams[1] -- structparams[4] are the parameters for lambda_t 
+# structparams[5] is alpha (should be negative) 
+# structparams[6] is omega (terminal value of SNF at day 100) 
+# structparams[7] governs the variance of the shocks 
+
+# Create a weighting matrix that upweights moments in the RD bandwidth and the RD estimate
+myw <- diag(41)
+myw[41,41] <- 5
+for(i in 1:40) { 
+  myw[i,i] <- 1-abs(i-22)/22 # triangular weights in distribution
+  }
+
+# Set number of cores to parallelize
+plan(multisession, workers = parallel::detectCores() - 1)
+
+scale_ratio <- c(5, 30, 5, .05, .001, 1, 10) # not sure what this should look like at first
+myouts <- gmm(moment_function, 
+              x = simdata,
+              # weightsMatrix=as.matrix(myw), # weight moments close to bandwidth higher
+              # method = "L-BFGS-B",       # Spscify optimizer method supporting bounds if needed
+              t0 = c(-5.7, 28.9, -5.39, 0.0589, -.01, -1.72, 8.09), # starting values,
+              crit = 1e-12, # tolerance level (default = 1e-7) 
+              onlyCoefficients = TRUE, # don't need standard errors for the moment
+              control = list(parscale = scale_ratio, trace = 1)) # to handle differently scaled parameters 
+
+# save file once computed 
+if (treated == TRUE) { 
+  save.image(paste0(path, "Convergence_DynamicModel_TREATED_20250410.RData", sep=""))
+} else { 
+  save.image(paste0(path, "Convergence_DynamicModel_CONTROL_20250410.RData", sep=""))
+}
+###########################################################
+```
+
+
+## Model Fit: Sick Spouse Group
+```{r model-fit-treated}
+# Treated figure
+rm(list = setdiff(ls(), "path"))
+load(paste0(path, "Convergence_DynamicModel_TREATED_20250410.RData", sep=""))
+structparams <- myouts$coefficients
+
+simdata <- expand_grid(
+  id = 1:N,
+  t = 1:100
+) %>%
+  arrange(id, t) %>% 
+  mutate(eps_k = revd(n = (100*N), scale=1), 
+         eps_d = revd(n = (100*N), scale=1)) 
+
+  l0 <- structparams[1] #scaling
+  l1 <- structparams[2]/1000 #scaling
+  l2 <- structparams[3]/1000 #scaling
+  l3 <- structparams[4]/1000 # scaling
+  alpha <- structparams[5]
+  omega <- structparams[6]
+  
+  # make a dataframe with 100 periods and a variable t
+  timevars <- data.frame(t = 1:100) %>%
+    mutate(lambda = l0 + l1*t + l2*t^2 + l3*t^3) %>%
+    # mutate(ubump = ifelse(t == 21, structparams[8], 
+    #                       ifelse(t == 22, structparams[9], 
+    #                              ifelse(t == 23, structparams[10], 0)))) %>%
+    mutate(p = ifelse(t < 22, 1e-5, 37.5),
+           omega = omega,
+           delta = 1,
+           alpha = alpha,
+           u = lambda + alpha*p) # + ubump)
+  
+  # solve the model for each individual with different shocks in parallel
+   pred_moments <- unique(simdata$id) %>% future_map_int(
+    ~simulate_person(.x, simdata, timevars, omega, myscale=structparams[7]),
+    .options = furrr_options(seed = TRUE)
+  )
+  pred_moments <- tibble(id = unique(simdata$id), exit_day = pred_moments)
+   
+  # Then you can calculate the moments
+  moments <- pred_moments %>% group_by(exit_day) %>% summarize(n = n()) %>% 
+    mutate(p = n/N) %>% # fill in with 0s if needed
+    right_join(data.frame(exit_day = 1:100), by = "exit_day") %>% 
+    mutate(p = ifelse(is.na(p), 0, p))
+  
+  moments <- moments %>% left_join(observed_moments, by = "exit_day") %>% 
+    mutate(moment = abs(p - frac_observed_treated)) %>% filter(exit_day <= 50) %>%
+    mutate(frac_observed_treated = frac_observed_treated*100, 
+           p = p * 100)
+    
+modelfit <- ggplot(moments, aes(x=exit_day)) +
+      geom_point(aes(y=p, color="Predicted"), size=3) +
+      geom_point(aes(y=frac_observed_treated, color="Actual"), size=3) +
+      theme_minimal() +
+      labs(x="Day in SNF", y = "%", color=NULL) +
+      scale_y_continuous(limits = c(0, 5), breaks = seq(0, 5, 1)) +
+      geom_vline(xintercept = 21.5, linetype="dashed") +
+         # tuck the legend into the top‐left of the panel
+      theme(
+        legend.position = c(0.02, 0.98),            # x, y in [0,1] (0 = left/bottom, 1 = right/top)
+        legend.justification = c("left", "top"),          # anchor the legend’s (0,1) corner
+      legend.background = element_rect(
+                           fill   = "white",        # so it doesn’t obscure points
+                           colour = "grey50",       # a little border helps
+                           size   = 0.5
+                         ))
+      # subtitle="Sick Spouse Group",
+modelfit
+ggsave(modelfit, filename = paste0(path, "ModelFit_TreatmentGroup_20250530.png", sep=""), 
+       width = 8, height = 6, dpi = 300)
+ggsave(modelfit, filename = paste0(path, "ModelFit_TreatmentGroup_20250530.pdf", sep=""), 
+       width = 8, height = 6, dpi = 300)
+```
+
+## Model Fit: Healthy Spouse Group
+```{r model-fit-control}
+# Treated figure
+rm(list = setdiff(ls(), "path"))
+load(paste0(path, "Convergence_DynamicModel_CONTROL_20250410.RData", sep=""))
+structparams <- myouts$coefficients
+
+simdata <- expand_grid(
+  id = 1:N,
+  t = 1:100
+) %>%
+  arrange(id, t) %>% 
+  mutate(eps_k = revd(n = (100*N), scale=1), 
+         eps_d = revd(n = (100*N), scale=1)) 
+
+  l0 <- structparams[1] #scaling
+  l1 <- structparams[2]/1000 #scaling
+  l2 <- structparams[3]/1000 #scaling
+  l3 <- structparams[4]/1000 # scaling
+  alpha <- structparams[5]
+  omega <- structparams[6]
+  
+  # make a dataframe with 100 periods and a variable t
+  timevars <- data.frame(t = 1:100) %>%
+    mutate(lambda = l0 + l1*t + l2*t^2 + l3*t^3) %>%
+    # mutate(ubump = ifelse(t == 21, structparams[8], 
+    #                       ifelse(t == 22, structparams[9], 
+    #                              ifelse(t == 23, structparams[10], 0)))) %>%
+    mutate(p = ifelse(t < 22, 1e-5, 37.5),
+           omega = omega,
+           delta = 1,
+           alpha = alpha,
+           u = lambda + alpha*p) # + ubump)
+  
+  # solve the model for each individual with different shocks in parallel
+   pred_moments <- unique(simdata$id) %>% future_map_int(
+    ~simulate_person(.x, simdata, timevars, omega, myscale=structparams[7]),
+    .options = furrr_options(seed = TRUE)
+  )
+  pred_moments <- tibble(id = unique(simdata$id), exit_day = pred_moments)
+   
+  # Then you can calculate the moments
+  moments <- pred_moments %>% group_by(exit_day) %>% summarize(n = n()) %>% 
+    mutate(p = n/N) %>% # fill in with 0s if needed
+    right_join(data.frame(exit_day = 1:100), by = "exit_day") %>% 
+    mutate(p = ifelse(is.na(p), 0, p))
+  
+  moments <- moments %>% left_join(observed_moments, by = "exit_day") %>% 
+    mutate(moment = abs(p - frac_observed_control)) %>% filter(exit_day <= 50) %>% 
+    mutate(p = p*100, frac_observed_control = frac_observed_control*100)
+      
+modelfit <- ggplot(moments, aes(x=exit_day)) +
+      geom_point(aes(y=p, color="Predicted"), size=3) +
+      geom_point(aes(y=frac_observed_control, color="Actual"), size=3) +
+      theme_minimal() +
+      labs(x="Day in SNF", y = "%", color=NULL) +
+      scale_y_continuous(limits = c(0, 5), breaks = seq(0, 5, 1)) +
+      geom_vline(xintercept = 21.5, linetype="dashed") +
+         # tuck the legend into the top‐left of the panel
+      theme(
+        legend.position = c(0.02, 0.98),            # x, y in [0,1] (0 = left/bottom, 1 = right/top)
+        legend.justification = c("left", "top"),          # anchor the legend’s (0,1) corner
+      legend.background = element_rect(
+                           fill   = "white",        # so it doesn’t obscure points
+                           colour = "grey50",       # a little border helps
+                           size   = 0.5
+                         ))
+      # subtitle="Healthy Spouse Group",
+modelfit
+ggsave(modelfit, filename = paste0(path, "ModelFit_ControlGroup_20250530.png", sep=""), 
+       width = 8, height = 6, dpi = 300)
+ggsave(modelfit, filename = paste0(path, "ModelFit_ControlGroup_20250530.pdf", sep=""), 
+       width = 8, height = 6, dpi = 300)
+```
+
+## Extensive Margin Shifts
+-    Calculate average u(day 1) in both groups
+-    Add shift parameter so that the fraction with positive utility matches extensive margin data.
+
+```{r ext-margin}
+# Load estimated parameters from both estimations 
+rm(list = setdiff(ls(), "path"))
+load(paste0(path, "Convergence_DynamicModel_TREATED_20250410.RData", sep=""))
+sp_treated <- myouts$coefficients
+rm(list = setdiff(ls(), c("path", "sp_treated")))
+load(paste0(path, "Convergence_DynamicModel_CONTROL_20250410.RData", sep=""))
+sp_control <- myouts$coefficients
+tokeep <- c("path", "sp_treated", "sp_control", "moment_function", "simulate_person", "simulate_moments")
+rm(list = setdiff(ls(), tokeep))
+
+# Load observed moments
+observed_moments <- read_csv(paste0(path, "ObservedMoments.csv", sep=""))
+names(observed_moments)[1] <- "exit_day"
+observed_moments <- observed_moments %>% 
+  mutate(group = exit_day >= 1) %>% 
+  group_by(group) %>% 
+  summarize(frac_observed_control = sum(frac_observed_control), 
+            frac_observed_treated = sum(frac_observed_treated))
+  # extensive margin differences
+
+# Now calculate the average utility on day 1 in both groups
+# first, control group
+N <- 5000
+simdata <- expand_grid(
+  id = 1:N,
+  t = 1:100
+) %>%
+  arrange(id, t) %>% 
+  mutate(eps_k = revd(n = (100*N), scale=1), 
+         eps_d = revd(n = (100*N), scale=1)) 
+
+l0 <- sp_control[1] #scaling
+l1 <- sp_control[2]/1000 #scaling
+l2 <- sp_control[3]/1000 #scaling
+l3 <- sp_control[4]/1000 # scaling
+alpha <- sp_control[5]
+omega <- sp_control[6]
+
+# make dataframe 
+timevars <- data.frame(t = 1:100) %>%
+  mutate(lambda = l0 + l1*t + l2*t^2 + l3*t^3) %>%
+  mutate(p = ifelse(t < 22, 1e-5, 37.5),
+         omega = omega,
+         delta = 1,
+         alpha = alpha,
+         u = lambda + alpha*p) # + ubump)
+
+# A needed function to use a given person's shocks to return outcomes
+valueday1 <- function(p, simdata, timevars, omega, myscale) { 
+  # Local copy with that person's shocks and inflate by the scale
+  local_timevars <- simdata %>% filter(id == p) %>% select(eps_d, eps_k, t) %>% 
+    left_join(timevars, by = "t") %>% 
+    mutate(eps_d = myscale*eps_d, 
+           eps_k = myscale*eps_k, # transform shocks accordingly
+           EV = ifelse(t == 100, omega, NA))
+  
+  for (d in 99:1) { # backward loop
+    local_timevars$EV[local_timevars$t == d] <- 
+      local_timevars$u[local_timevars$t == d + 1] + 
+      log(exp(1 * local_timevars$EV[local_timevars$t == d + 1]) + 1)
+  }
+  local_timevars$V <- NA
+  local_timevars$V[local_timevars$t == 100] <- local_timevars$u[local_timevars$t == 100]
+  
+  for (d in 99:1) { # backward loop
+    local_timevars$V[local_timevars$t == d] <- 
+      local_timevars$u[local_timevars$t == d] + 
+      pmax(local_timevars$eps_k[local_timevars$t == d] + 1 * local_timevars$EV[local_timevars$t == d + 1],
+           local_timevars$eps_d[local_timevars$t == d])
+  }
+  
+  # Calculate cumulative value
+  local_timevars <- local_timevars %>% mutate(cumV = cumsum(V))
+  day1 <- local_timevars %>% filter(t == 1) %>% select(cumV) %>% as.numeric()
+  return(day1)
+}
+
+# solve the model for each individual with different shocks in parallel
+ pred_moments <- unique(simdata$id) %>% future_map_dbl(
+  ~valueday1(.x, simdata, timevars, omega, myscale=sp_control[7]),
+  .options = furrr_options(seed = TRUE)
+)
+pred_moments <- tibble(id = unique(simdata$id), value_day1 = pred_moments)
+
+# now we want to shift these up and down so that extensive margin moment matches 
+# TODO: do we want to include this as a parameter in the GMM estimation above? Can include for the next run
+shift <- quantile(pred_moments$value_day1,1-0.2141) # quantile(pred_moments$value_day1,observed_moments$frac_observed_control[1])
+pred_moments$value_day1 <- pred_moments$value_day1 - shift
+sp_control <- c(sp_control, shift)
+
+# now, treated group
+l0 <- sp_treated[1] #scaling
+l1 <- sp_treated[2]/1000 #scaling
+l2 <- sp_treated[3]/1000 #scaling
+l3 <- sp_treated[4]/1000 # scaling
+alpha <- sp_treated[5]
+omega <- sp_treated[6]
+
+# make dataframe 
+timevars <- data.frame(t = 1:100) %>%
+  mutate(lambda = l0 + l1*t + l2*t^2 + l3*t^3) %>%
+  mutate(p = ifelse(t < 22, 1e-5, 37.5),
+         omega = omega,
+         delta = 1,
+         alpha = alpha,
+         u = lambda + alpha*p) # + ubump)
+
+# A needed function to use a given person's shocks to return outcomes
+valueday1 <- function(p, simdata, timevars, omega, myscale) { 
+  # Local copy with that person's shocks and inflate by the scale
+  local_timevars <- simdata %>% filter(id == p) %>% select(eps_d, eps_k, t) %>% 
+    left_join(timevars, by = "t") %>% 
+    mutate(eps_d = myscale*eps_d, 
+           eps_k = myscale*eps_k, # transform shocks accordingly
+           EV = ifelse(t == 100, omega, NA))
+  
+  for (d in 99:1) { # backward loop
+    local_timevars$EV[local_timevars$t == d] <- 
+      local_timevars$u[local_timevars$t == d + 1] + 
+      log(exp(1 * local_timevars$EV[local_timevars$t == d + 1]) + 1)
+  }
+  local_timevars$V <- NA
+  local_timevars$V[local_timevars$t == 100] <- local_timevars$u[local_timevars$t == 100]
+  
+  for (d in 99:1) { # backward loop
+    local_timevars$V[local_timevars$t == d] <- 
+      local_timevars$u[local_timevars$t == d] + 
+      pmax(local_timevars$eps_k[local_timevars$t == d] + 1 * local_timevars$EV[local_timevars$t == d + 1],
+           local_timevars$eps_d[local_timevars$t == d])
+  }
+  
+  # Calculate cumulative value
+  local_timevars <- local_timevars %>% mutate(cumV = cumsum(V))
+  day1 <- local_timevars %>% filter(t == 1) %>% select(cumV) %>% as.numeric()
+  return(day1)
+}
+
+# solve the model for each individual with different shocks in parallel
+ pred_moments <- unique(simdata$id) %>% future_map_dbl(
+  ~valueday1(.x, simdata, timevars, omega, myscale=sp_treated[7]),
+  .options = furrr_options(seed = TRUE)
+)
+pred_moments <- tibble(id = unique(simdata$id), value_day1 = pred_moments)
+
+# now we want to shift these up and down so that extensive margin moment matches 
+# TODO: do we want to include this as a parameter in the GMM estimation above? Can include for the next run
+shift <- quantile(pred_moments$value_day1,1-0.2485) #quantile(pred_moments$value_day1,observed_moments$frac_observed_treated[1])
+pred_moments$value_day1 <- pred_moments$value_day1 - shift
+sp_treated <- c(sp_treated, shift)
+```
+
+## Counterfactuals
+-    For each counterfactual, determine % using SNF, average LOS, average cost, and CS
+-    Do this for healthy and sick spouse groups separately
+-    Class 1: full coinsurance, no coinsurance, 20% and 50% coinsurance
+-    Casss 2: coinsurance starts on day 0, 10, 21, and 50
+
+```{r counterfactuals}
+simulate_person_cf <- function(p, simdata, timevars, omega_c, omega_t,
+                               myscale_c, myscale_t, shift_c, shift_t, treated=FALSE) { 
+  
+  if (treated == TRUE) {
+    # Local copy with that person's shocks and inflate by the scale
+    local_timevars <- simdata %>% filter(id == p) %>% select(eps_d, eps_k, t) %>% 
+      left_join(timevars, by = "t") %>% 
+      mutate(eps_d = myscale_t*eps_d, 
+             eps_k = myscale_t*eps_k, # transform shocks accordingly
+             EV = ifelse(t == 100, omega_t, NA))
+    
+    for (d in 99:1) { # backward loop
+      local_timevars$EV[local_timevars$t == d] <- 
+        local_timevars$u_t[local_timevars$t == d + 1] + 
+        log(exp(1 * local_timevars$EV[local_timevars$t == d + 1]) + 1)
+    }
+    local_timevars$V <- NA
+    local_timevars$V[local_timevars$t == 100] <- local_timevars$u_t[local_timevars$t == 100]
+    
+    for (d in 99:1) { # backward loop
+      local_timevars$V[local_timevars$t == d] <- 
+        local_timevars$u_t[local_timevars$t == d] + 
+        pmax(local_timevars$eps_k[local_timevars$t == d] + 1 * local_timevars$EV[local_timevars$t == d + 1],
+             local_timevars$eps_d[local_timevars$t == d])
+    }
+    
+    # Calculate cumulative value
+    local_timevars <- local_timevars %>% mutate(cumV = cumsum(V) - shift_t)
+    
+    # Find the day that maximizes cumulative value
+    day1 <- local_timevars %>% filter(t == 1) %>% select(cumV) %>% as.integer()
+    if (day1 >= 0) { 
+      exit_day <- which.max(local_timevars$cumV)
+      value <- local_timevars$cumV[exit_day]
+    } else { 
+      exit_day <- 0 # if negative, then exit on day 0 (never enter) 
+      value <- 0
+    }
+    
+    # If value on the first day is negative, then return 0 instead
+    # exit_day <- ifelse(local_timevars$V[1] < 0, 0, exit_day)
+    
+    # If value is infinite, return corner solution
+    exit_day <- ifelse(local_timevars$V[1] == Inf, 100, exit_day)
+    return(c(exit_day,value))
+  } else if (treated == FALSE) { 
+     # Local copy with that person's shocks and inflate by the scale
+    local_timevars <- simdata %>% filter(id == p) %>% select(eps_d, eps_k, t) %>% 
+      left_join(timevars, by = "t") %>% 
+      mutate(eps_d = myscale_c*eps_d, 
+             eps_k = myscale_c*eps_k, # transform shocks accordingly
+             EV = ifelse(t == 100, omega_c, NA))
+    
+    for (d in 99:1) { # backward loop
+      local_timevars$EV[local_timevars$t == d] <- 
+        local_timevars$u_c[local_timevars$t == d + 1] + 
+        log(exp(1 * local_timevars$EV[local_timevars$t == d + 1]) + 1)
+    }
+    local_timevars$V <- NA
+    local_timevars$V[local_timevars$t == 100] <- local_timevars$u_c[local_timevars$t == 100]
+    
+    for (d in 99:1) { # backward loop
+      local_timevars$V[local_timevars$t == d] <- 
+        local_timevars$u_c[local_timevars$t == d] + 
+        pmax(local_timevars$eps_k[local_timevars$t == d] + 1 * local_timevars$EV[local_timevars$t == d + 1],
+             local_timevars$eps_d[local_timevars$t == d])
+    }
+    
+    # Calculate cumulative value
+    local_timevars <- local_timevars %>% mutate(cumV = cumsum(V) - shift_c)
+    
+    # Find the day that maximizes cumulative value
+    day1 <- local_timevars %>% filter(t == 1) %>% select(cumV) %>% as.integer()
+    if (day1 >= 0) { 
+      exit_day <- which.max(local_timevars$cumV)
+      value <- local_timevars$cumV[exit_day]
+    } else { 
+      exit_day <- 0 # if negative, then exit on day 0 (never enter)  
+      value <- 0
+    }
+    
+    # If value on the first day is negative, then return 0 instead
+    # exit_day <- ifelse(local_timevars$V[1] < 0, 0, exit_day)
+    
+    # If value is infinite, return corner solution
+    exit_day <- ifelse(local_timevars$V[1] == Inf, 100, exit_day)
+    return(c(exit_day,value))
+    }
+}
+
+N <- 10000
+simdata <- expand_grid(
+  id = 1:N,
+  t = 1:100
+) %>%
+  arrange(id, t) %>% 
+  mutate(eps_k = revd(n = (100*N), scale=1), 
+         eps_d = revd(n = (100*N), scale=1)) 
+
+l0_c <- sp_control[1] #scaling
+l1_c <- sp_control[2]/1000 #scaling
+l2_c <- sp_control[3]/1000 #scaling
+l3_c <- sp_control[4]/1000 # scaling
+alpha_c <- sp_control[5]
+omega_c <- sp_control[6]
+shift_c <- sp_control[8]
+
+l0_t <- sp_treated[1] #scaling
+l1_t <- sp_treated[2]/1000 #scaling
+l2_t <- sp_treated[3]/1000 #scaling
+l3_t <- sp_treated[4]/1000 # scaling
+alpha_t <- sp_treated[5]
+omega_t <- sp_treated[6]
+shift_t <- sp_treated[8]
+
+# make dataframe 
+timevars <- data.frame(t = 1:100) %>%
+  mutate(lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3, 
+         lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+  mutate(p = ifelse(t < 22, 1e-5, 37.5),
+         omega_c = omega_c,
+         omega_t = omega_t,
+         delta = 1,
+         alpha_c = alpha_c,
+         alpha_t = alpha_t,
+         u_c = lambda_c + alpha_c*p, 
+         u_t = lambda_t + alpha_t*p) 
+
+# solve the model for each individual with different shocks in parallel
+cfsoln_t <- unique(simdata$id) %>% future_map(
+  ~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                      myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                      shift_c, shift_t, treated=TRUE),
+  .options = furrr_options(seed = TRUE)
+)
+cfsoln_t <- as.data.frame(do.call(rbind, cfsoln_t))
+names(cfsoln_t) <- c("exit_day", "value")
+ cfsoln_c <- unique(simdata$id) %>% future_map(
+  ~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                      myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                      shift_c, shift_t, treated=FALSE),
+  .options = furrr_options(seed = TRUE)
+)
+ cfsoln_c <- as.data.frame(do.call(rbind, cfsoln_c))
+ names(cfsoln_c) <- c("exit_day", "value")
+
+# calculate main table measures
+cfsoln_t %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_t %>% summarize(exit_day = mean(exit_day))
+cfsoln_t %>% mutate(paid = pmax(0,(exit_day-20)*37.5)) %>% 
+  summarize(paid = mean(paid))
+cfsoln_t %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*0.8)))) %>% 
+  summarize(paid = mean(paid)) # government costs: full coverage for the first days, then 80% of the rest (assuming no Medigap for now). 
+cfsoln_t %>% mutate(value = value/0.009) %>% summarize(value = mean(value))
+
+cfsoln_c %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_c %>% summarize(exit_day = mean(exit_day))
+cfsoln_c %>% 
+  mutate(paid = pmax(0,(exit_day-20)*37.5)) %>% 
+  summarize(paid = mean(paid))
+cfsoln_c %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*0.8)))) %>% 
+  summarize(paid = mean(paid)) # government costs: full coverage for the first days, then 80% of the rest (assuming no Medigap for now). 
+cfsoln_c %>% 
+  mutate(value = value/0.097) %>% summarize(value = mean(value))
+```
+
+Now repeat this for price at 0%, 50%, and 100% coinsurance 
+
+```{r cf-price}
+# first, set price to 0 
+timevars <- data.frame(t = 1:100) %>%
+  mutate(lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3, 
+         lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+  mutate(p = ifelse(t < 22, 1e-5, 1e-5),
+         omega_c = omega_c,
+         omega_t = omega_t,
+         delta = 1,
+         alpha_c = alpha_c,
+         alpha_t = alpha_t,
+         u_c = lambda_c + alpha_c*p, 
+         u_t = lambda_t + alpha_t*p) 
+
+# solve the model for each individual with different shocks in parallel
+cfsoln_p0_t <- unique(simdata$id) %>% future_map(
+  ~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                      myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                      shift_c, shift_t, treated=TRUE),
+  .options = furrr_options(seed = TRUE)
+)
+cfsoln_p0_t <- as.data.frame(do.call(rbind, cfsoln_p0_t))
+names(cfsoln_p0_t) <- c("exit_day", "value")
+ cfsoln_p0_c <- unique(simdata$id) %>% future_map(
+  ~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                      myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                      shift_c, shift_t, treated=FALSE),
+  .options = furrr_options(seed = TRUE)
+)
+ cfsoln_p0_c <- as.data.frame(do.call(rbind, cfsoln_p0_c))
+ names(cfsoln_p0_c) <- c("exit_day", "value")
+ 
+ cfsoln_p0_t %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_p0_t %>% summarize(exit_day = mean(exit_day))
+cfsoln_p0_t %>% mutate(paid = pmax(0,(exit_day-20)*187.5*0)) %>% 
+  summarize(paid = mean(paid))
+cfsoln_p0_t %>% mutate(value = value/0.009) %>% summarize(value = mean(value))
+cfsoln_p0_t %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*1)))) %>% 
+  summarize(paid = mean(paid)) # government costs: 
+
+cfsoln_p0_c %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_p0_c %>% summarize(exit_day = mean(exit_day))
+cfsoln_p0_c %>% mutate(paid = pmax(0,(exit_day-20)*187.50*0)) %>% 
+  summarize(paid = mean(paid))
+cfsoln_p0_c %>% mutate(value = value/0.097) %>% summarize(value = mean(value))
+cfsoln_p0_c %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*1)))) %>% 
+  summarize(paid = mean(paid)) # government costs: 
+ 
+# now 50% coinsurance
+timevars <- data.frame(t = 1:100) %>%
+mutate(lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3, 
+       lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+mutate(p = ifelse(t < 22, 1e-5, 187.50*0.5),
+       omega_c = omega_c,
+       omega_t = omega_t,
+       delta = 1,
+       alpha_c = alpha_c,
+       alpha_t = alpha_t,
+       u_c = lambda_c + alpha_c*p, 
+       u_t = lambda_t + alpha_t*p) 
+
+# solve the model for each individual with different shocks in parallel
+cfsoln_p50_t <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=TRUE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_p50_t <- as.data.frame(do.call(rbind, cfsoln_p50_t))
+names(cfsoln_p50_t) <- c("exit_day", "value")
+cfsoln_p50_c <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=FALSE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_p50_c <- as.data.frame(do.call(rbind, cfsoln_p50_c))
+names(cfsoln_p50_c) <- c("exit_day", "value")
+
+ cfsoln_p50_t %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_p50_t %>% summarize(exit_day = mean(exit_day))
+cfsoln_p50_t %>% mutate(paid = pmax(0,(exit_day-20)*187.5*0.5)) %>% 
+  summarize(paid = mean(paid))
+cfsoln_p50_t %>% mutate(value = value/0.009) %>% summarize(value = mean(value))
+cfsoln_p50_t %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*0.5)))) %>% 
+  summarize(paid = mean(paid)) # government costs: 
+
+cfsoln_p50_c %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_p50_c %>% summarize(exit_day = mean(exit_day))
+cfsoln_p50_c %>%  mutate(paid = pmax(0,(exit_day-20)*187.50*0.5)) %>% 
+  summarize(paid = mean(paid))
+cfsoln_p50_c %>%  mutate(value = value/0.097) %>% summarize(value = mean(value))
+cfsoln_p50_c %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*0.5)))) %>% 
+  summarize(paid = mean(paid)) # government costs: 
+
+# now 100% coinsurance
+timevars <- data.frame(t = 1:100) %>%
+mutate(lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3, 
+       lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+mutate(p = ifelse(t < 22, 1e-5, 187.50*1),
+       omega_c = omega_c,
+       omega_t = omega_t,
+       delta = 1,
+       alpha_c = alpha_c,
+       alpha_t = alpha_t,
+       u_c = lambda_c + alpha_c*p, 
+       u_t = lambda_t + alpha_t*p) 
+
+# solve the model for each individual with different shocks in parallel
+cfsoln_p100_t <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=TRUE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_p100_t <- as.data.frame(do.call(rbind, cfsoln_p100_t))
+names(cfsoln_p100_t) <- c("exit_day", "value")
+cfsoln_p100_c <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=FALSE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_p100_c <- as.data.frame(do.call(rbind, cfsoln_p100_c))
+names(cfsoln_p100_c) <- c("exit_day", "value")
+
+cfsoln_p100_t %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_p100_t %>% summarize(exit_day = mean(exit_day))
+cfsoln_p100_t %>% mutate(paid = pmax(0,(exit_day-20)*187.5*0.5)) %>% 
+  summarize(paid = mean(paid))
+cfsoln_p100_t %>% mutate(value = value/0.009) %>% summarize(value = mean(value))
+cfsoln_p100_t %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*0)))) %>% 
+  summarize(paid = mean(paid)) # government costs: 
+
+cfsoln_p100_c %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_p100_c %>% summarize(exit_day = mean(exit_day))
+cfsoln_p100_c %>% mutate(paid = pmax(0,(exit_day-20)*187.50*1)) %>% 
+  summarize(paid = mean(paid))
+cfsoln_p100_c %>% mutate(value = value/0.097) %>% summarize(value = mean(value))
+cfsoln_p100_c %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*0)))) %>% 
+  summarize(paid = mean(paid)) # government costs: 
+```
+
+Now vary when that coinsurance starts
+```{r cf-time}
+
+# day 0
+timevars <- data.frame(t = 1:100) %>%
+mutate(lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3, 
+       lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+mutate(p = 187.50*0.2,
+       omega_c = omega_c,
+       omega_t = omega_t,
+       delta = 1,
+       alpha_c = alpha_c,
+       alpha_t = alpha_t,
+       u_c = lambda_c + alpha_c*p, 
+       u_t = lambda_t + alpha_t*p) 
+
+# solve the model for each individual with different shocks in parallel
+cfsoln_d0_t <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=TRUE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_d0_t <- as.data.frame(do.call(rbind, cfsoln_d0_t))
+names(cfsoln_d0_t) <- c("exit_day", "value")
+cfsoln_d0_c <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=FALSE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_d0_c <- as.data.frame(do.call(rbind, cfsoln_d0_c))
+names(cfsoln_d0_c) <- c("exit_day", "value")
+
+ cfsoln_d0_t %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_d0_t %>% summarize(exit_day = mean(exit_day))
+cfsoln_d0_t %>% mutate(paid = pmax(0,(exit_day-0)*187.5*0.2)) %>%
+  summarize(paid = mean(paid))
+cfsoln_d0_t %>% mutate(value = value/0.009) %>% summarize(value = mean(value))
+
+cfsoln_d0_c %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_d0_c %>% summarize(exit_day = mean(exit_day))
+cfsoln_d0_c %>% mutate(paid = pmax(0,(exit_day-0)*187.50*0.2)) %>%
+  summarize(paid = mean(paid))
+cfsoln_d0_c %>% mutate(value = value/0.097) %>% summarize(value = mean(value))
+
+# day 7
+timevars <- data.frame(t = 1:100) %>%
+mutate(lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3, 
+       lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+mutate(p = ifelse(t < 8, 1e-5, 187.50*0.2),
+       omega_c = omega_c,
+       omega_t = omega_t,
+       delta = 1,
+       alpha_c = alpha_c,
+       alpha_t = alpha_t,
+       u_c = lambda_c + alpha_c*p, 
+       u_t = lambda_t + alpha_t*p) 
+
+# solve the model for each individual with different shocks in parallel
+cfsoln_d7_t <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=TRUE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_d7_t <- as.data.frame(do.call(rbind, cfsoln_d7_t))
+names(cfsoln_d7_t) <- c("exit_day", "value")
+cfsoln_d7_c <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=FALSE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_d7_c <- as.data.frame(do.call(rbind, cfsoln_d7_c))
+names(cfsoln_d7_c) <- c("exit_day", "value")
+
+ cfsoln_d7_t %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_d7_t %>% summarize(exit_day = mean(exit_day))
+cfsoln_d7_t %>% mutate(paid = pmax(0,(exit_day-7)*187.5*0.2)) %>%
+  summarize(paid = mean(paid))
+cfsoln_d7_t %>% mutate(value = value/0.009) %>% summarize(value = mean(value))
+
+cfsoln_d7_c %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_d7_c %>%  summarize(exit_day = mean(exit_day))
+cfsoln_d7_c %>% mutate(paid = pmax(0,(exit_day-7)*187.50*0.2)) %>%
+  summarize(paid = mean(paid))
+cfsoln_d7_c %>% mutate(value = value/0.097) %>% summarize(value = mean(value))
+
+# day 30
+timevars <- data.frame(t = 1:100) %>%
+mutate(lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3, 
+       lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+mutate(p = ifelse(t < 31, 1e-5, 187.50*0.2),
+       omega_c = omega_c,
+       omega_t = omega_t,
+       delta = 1,
+       alpha_c = alpha_c,
+       alpha_t = alpha_t,
+       u_c = lambda_c + alpha_c*p, 
+       u_t = lambda_t + alpha_t*p) 
+
+# solve the model for each individual with different shocks in parallel
+cfsoln_d30_t <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=TRUE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_d30_t <- as.data.frame(do.call(rbind, cfsoln_d30_t))
+names(cfsoln_d30_t) <- c("exit_day", "value")
+cfsoln_d30_c <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=FALSE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_d30_c <- as.data.frame(do.call(rbind, cfsoln_d30_c))
+names(cfsoln_d30_c) <- c("exit_day", "value")
+
+ cfsoln_d30_t %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_d30_t %>% summarize(exit_day = mean(exit_day))
+cfsoln_d30_t %>% mutate(paid = pmax(0,(exit_day-30)*187.5*0.2)) %>%
+  summarize(paid = mean(paid))
+cfsoln_d30_t %>%  mutate(value = value/0.009) %>% summarize(value = mean(value))
+
+cfsoln_d30_c %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_d30_c %>% summarize(exit_day = mean(exit_day))
+cfsoln_d30_c %>% mutate(paid = pmax(0,(exit_day-30)*187.50*0.2)) %>%
+  summarize(paid = mean(paid))
+cfsoln_d30_c %>%  mutate(value = value/0.097) %>% summarize(value = mean(value))
+
+# day 60
+timevars <- data.frame(t = 1:100) %>%
+mutate(lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3, 
+       lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+mutate(p = ifelse(t < 61, 1e-5, 187.50*0.2),
+       omega_c = omega_c,
+       omega_t = omega_t,
+       delta = 1,
+       alpha_c = alpha_c,
+       alpha_t = alpha_t,
+       u_c = lambda_c + alpha_c*p, 
+       u_t = lambda_t + alpha_t*p) 
+
+# solve the model for each individual with different shocks in parallel
+cfsoln_d60_t <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=TRUE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_d60_t <- as.data.frame(do.call(rbind, cfsoln_d60_t))
+names(cfsoln_d60_t) <- c("exit_day", "value")
+cfsoln_d60_c <- unique(simdata$id) %>% future_map(
+~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                    myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                    shift_c, shift_t, treated=FALSE),
+.options = furrr_options(seed = TRUE)
+)
+cfsoln_d60_c <- as.data.frame(do.call(rbind, cfsoln_d60_c))
+names(cfsoln_d60_c) <- c("exit_day", "value")
+
+ cfsoln_d60_t %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_d60_t %>% summarize(exit_day = mean(exit_day))
+cfsoln_d60_t %>% mutate(paid = pmax(0,(exit_day-60)*187.5*0.2)) %>%
+  summarize(paid = mean(paid))
+cfsoln_d60_t %>% mutate(value = value/0.009) %>% summarize(value = mean(value))
+
+cfsoln_d60_c %>% mutate(test = ifelse(exit_day > 0, 100, 0)) %>% summarize(test = mean(test))
+cfsoln_d60_c %>% summarize(exit_day = mean(exit_day))
+cfsoln_d60_c %>% mutate(paid = pmax(0,(exit_day-60)*187.50*0.2)) %>%
+  summarize(paid = mean(paid))
+cfsoln_d60_c %>% mutate(value = value/0.097) %>% summarize(value = mean(value))
+
+beepr::beep(sound=3)
+```
+
+## Transfers with Balanced Budget
+
+```{r transfers}
+# per-person government spending prior to any transfers (weighted by popsize)
+frac_c <- 1-0.27 # from KFF, about 27% of Medicare enrollees live alone
+pre_spend <- (1-frac_c)*(cfsoln_t %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*0.8)))) %>% 
+  summarize(paid = mean(paid)) %>% pull(paid)) + frac_c*(cfsoln_c %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*0.8)))) %>% 
+  summarize(paid = mean(paid)) %>% pull(paid))
+
+# if we move to full insurance for the treated group, what is per-person government spending only in that group
+post_spend_t <- cfsoln_p0_t %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*1)))) %>% 
+  summarize(paid = mean(paid)) %>% pull(paid)
+
+# What does this mean, for a balanced budget, can be spent per person on the control group? 
+post_spend_c <- (pre_spend - (1-frac_c)*post_spend_t)/frac_c
+
+# What does this level of spending imply for the level of coverage that can be offered to the control group? (rough estimate suggests that coverage should be about 71.2% of what it was, or 56.96% instead of 80%)
+timevars <- data.frame(t = 1:100) %>%
+  mutate(lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3, 
+         lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+  mutate(p = ifelse(t < 22, 1e-5, 187.50*(1-0.8*0.95)), # new price is $45 instead of $37.50
+         omega_c = omega_c,
+         omega_t = omega_t,
+         delta = 1,
+         alpha_c = alpha_c,
+         alpha_t = alpha_t,
+         u_c = lambda_c + alpha_c*p, 
+         u_t = lambda_t + alpha_t*p) 
+
+# solve the model for each individual with different shocks in parallel
+ cfsoln_transfer_c <- unique(simdata$id) %>% future_map(
+  ~simulate_person_cf(.x, simdata, timevars, omega_c, omega_t, 
+                      myscale_c=sp_control[7], myscale_t = sp_treated[7], 
+                      shift_c, shift_t, treated=FALSE),
+  .options = furrr_options(seed = TRUE)
+)
+cfsoln_transfer_c <- as.data.frame(do.call(rbind, cfsoln_transfer_c))
+names(cfsoln_transfer_c) <- c("exit_day", "value")
+post_spend <- (1-frac_c)*(cfsoln_p0_t %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*1)))) %>% 
+  summarize(paid = mean(paid)) %>% pull(paid)) + frac_c*(cfsoln_transfer_c %>% mutate(paid = ifelse(exit_day == 0, 0, 
+                                  ifelse(exit_day <= 20, exit_day*187.50, 
+                                  20*187.50 + (exit_day-20)*(187.50*0.8*0.712)))) %>% 
+  summarize(paid = mean(paid)) %>% pull(paid))
+
+pre_welfare <- frac_c*(cfsoln_c %>% mutate(value = value/0.097) %>% summarize(value = mean(value)) %>% pull(value)) + 
+  (1-frac_c)*(cfsoln_t %>% mutate(value = value/0.009) %>% summarize(value = mean(value)) %>% pull(value))
+post_welfare <- frac_c*(cfsoln_transfer_c %>% mutate(value = value/0.097) %>% summarize(value = mean(value)) %>% pull(value)) + 
+  (1-frac_c)*(cfsoln_p0_t %>% mutate(value = value/0.009) %>% summarize(value = mean(value)) %>% pull(value))
+```
+
+## Main Equations
+
+-   utility flows: $u_t = \lambda_t + \alpha p_t$ (where we use the SNF price schedule for $p_t$)
+-   patient decision: $\{$enter,exit$\}$ with idiosyncratic (T1EV) shocks $\{\varepsilon_{kt}, \varepsilon_{dt}\}$
+-   Hence $V_t(\varepsilon_t) = u_t + \max\{\varepsilon_{kt}+\delta EV_{t+1}, \varepsilon_{dt}\}$
+-   Assign a termination value $\Omega=EV_{100}$
+-   Given distributional assumptions, this gives us $EV_t=u_{t+1}+\log(\exp(\delta EV_{t+1})+1)$
+
+## Parameterization
+
+```{r parameterization }
+# Load estimated parameters from both estimations 
+rm(list = ls())
+load(paste0(path, "Convergence_DynamicModel_TREATED_20250410.RData", sep=""))
+sp_treated <- myouts$coefficients
+rm(list = setdiff(ls(), c("path", "sp_treated")))
+load(paste0(path, "Convergence_DynamicModel_CONTROL_20250410.RData", sep=""))
+sp_control <- myouts$coefficients
+tokeep <- c("sp_treated", "sp_control", "moment_function", "simulate_person", "simulate_moments")
+rm(list = setdiff(ls(), tokeep))
+
+# structparams[1] -- structparams[4] are the parameters for lambda_t 
+# structparams[5] is alpha (should be negative) 
+# structparams[6] is omega (terminal value of SNF at day 100) 
+# structparams[7] governs the variance of the shocks 
+# structparams[8]-structparams[10] for day-specific utility shocks for day 21, 22, 23
+
+# Do this once for treated and once for control 
+l0_t <- sp_treated[1] # these variables dictate $\lambda_t$
+l1_t <- sp_treated[2]/1000
+l2_t <- sp_treated[3]/1000
+l3_t <- sp_treated[4]/1000
+omega_t <- sp_treated[6] # termination value
+delta_t <- 1 # discount factor
+alpha_t <- sp_treated[5] # price coefficient (for treated group; higher for control group)
+epscale_t <- sp_treated[7] # scaling for shocks
+
+l0_c <- sp_control[1] # these variables dictate $\lambda_c$
+l1_c <- sp_control[2]/1000
+l2_c <- sp_control[3]/1000
+l3_c <- sp_control[4]/1000
+omega_c <- sp_control[6] # termination value
+delta_c <- 1 # discount factor
+alpha_c <- sp_control[5] # price coefficient (for treated group; higher for control group)
+epscale_c <- sp_control[7] # scaling for shocks
+
+# make a dataframe with 100 periods and a variable t
+timevars <- data.frame(t = 1:100) %>% 
+  mutate(lambda_t = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3, 
+         lambda_c = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3) %>%
+  # mutate(ubump_t = ifelse(t == 21, sp_treated[8], 
+  #                         ifelse(t == 22, sp_treated[9], 
+  #                                ifelse(t == 23, sp_treated[10], 0))),
+  #        ubump_c = ifelse(t == 21, sp_control[8], 
+  #                         ifelse(t == 22, sp_control[9], 
+  #                                ifelse(t == 23, sp_control[10], 0)))) %>%
+  mutate(p = ifelse(t < 22, 1e-5, 37.5), 
+         omega_t = omega_t, 
+         delta = delta_t,
+         alpha_t = alpha_t,
+         omega_c = omega_c, 
+         alpha_c = alpha_c,
+         u_t = lambda_t + alpha_t*p, # + ubump_t,
+         u_c = lambda_c + alpha_c*p) # + ubump_c)
+
+# Finally, draw the shocks in each period using a T1EV distribution
+timevars <- timevars %>% 
+  mutate(eps_k = revd(n = 100, scale=3), 
+         eps_d = revd(n = 100, scale=3))
+
+# Plot the utility curves for both groups
+ggplot(timevars, aes(x=t)) + 
+  geom_point(aes(y=u_t, color='Sick Spouse Group'), size=2) +
+  geom_point(aes(y=u_c, color='Healthy Spouse Group'), size=2) +
+  theme_minimal() + 
+  labs(x = "Days in SNF", y = "", subtitle="Flow Utilities", color=NULL) + 
+  geom_hline(yintercept = 0) # + 
+  ggplot::theme(legend.position="inside",
+      legend.position.inside = c(0.01, 0.99),       # top-left corner inside the plot area
+      legend.justification = c("left", "top"))
+```
+
+## Calculate EV via the Bellman equation
+    - Given this, we then use the shocks to calculate the value function in each period and maximize
+    - We then calculate and output cumulative value, choose to exit to maximize this 
+
+```{r bellman, }
+timevars <- timevars %>% mutate(EV_t = ifelse(t==100, omega_t, NA),
+                                EV_c = ifelse(t==100, omega_c, NA))
+for (d in 99:1) { # backward loop
+  timevars <- timevars %>% 
+    mutate(EV_t = ifelse(t == d, lead(u_t) + log(exp(delta*lead(EV_t))+1), EV_t),
+           EV_c = ifelse(t == d, lead(u_c) + log(exp(delta*lead(EV_c))+1), EV_c))
+}
+
+ggplot(timevars, aes(x=t)) + 
+  geom_point(aes(y=EV_t, color='Sick Spouse Group'), size=2) +
+  geom_point(aes(y=EV_c, color='Healthy Spouse Group'), size=2) +
+  theme_minimal() + 
+  labs(x = "Days in SNF", y = "", subtitle="Expected Value at t", color=NULL) + 
+  geom_hline(yintercept = 0) # + 
+  theme(legend.position="inside",
+      legend.position.inside = c(0.01, 0.99),       # top-left corner inside the plot area
+      legend.justification = c("left", "top"))
+```
+
+## Extrapolating Demand
+    - Given these expected valuations, exit day is day that maximizes expected cumulative value, with individual heterogeneity
+    - We can then pull demand for day 21 as the # of individuals in sample choosing to stay as price varies
+```{r demand}
+plan(multisession, workers = parallel::detectCores() - 1)
+
+# Parameters to specify
+N <- 1000 # how many individuals to sample
+myday <- 22 # which day are you constructing the demand curve for? 
+
+# Functions (3)
+simulate_person <- function(p, simdata, timevars, omega, myscale) { 
+    #  A needed function to use a given person's shocks to return outcomes
+  # Local copy with that person's shocks and inflate by the scale
+  local_timevars <- simdata %>% filter(id == p) %>% select(eps_d, eps_k, t) %>% 
+    left_join(timevars, by = "t") %>% 
+    mutate(eps_d = myscale*eps_d, 
+           eps_k = myscale*eps_k, # transform shocks accordingly
+           EV = ifelse(t == 100, omega, NA))
+  
+  for (d in 99:1) { # backward loop
+    local_timevars$EV[local_timevars$t == d] <- 
+      local_timevars$u[local_timevars$t == d + 1] + 
+      log(exp(1 * local_timevars$EV[local_timevars$t == d + 1]) + 1)
+  }
+  local_timevars$V <- NA
+  local_timevars$V[local_timevars$t == 100] <- local_timevars$u[local_timevars$t == 100]
+  
+  for (d in 99:1) { # backward loop
+    local_timevars$V[local_timevars$t == d] <- 
+      local_timevars$u[local_timevars$t == d] + 
+      pmax(local_timevars$eps_k[local_timevars$t == d] + 1 * local_timevars$EV[local_timevars$t == d + 1],
+           local_timevars$eps_d[local_timevars$t == d])
+  }
+  
+  # Calculate cumulative value
+  local_timevars <- local_timevars %>% mutate(cumV = cumsum(V))
+  
+  # Find the day that maximizes cumulative value
+  exit_day <- which.max(local_timevars$cumV)
+  
+  # If value on the first day is negative, then return 0 instead
+  # exit_day <- ifelse(local_timevars$V[1] < 0, 0, exit_day)
+  
+  # If value is infinite, return corner solution
+  exit_day <- ifelse(local_timevars$V[1] == Inf, 100, exit_day)
+  return(exit_day)
+}
+
+return_demand_c <- function(myprice) {
+# FIRST DO THIS FOR THE CONTROL (HEALTHY SPOUSE) GROUP
+  # make a dataframe with 100 periods and a variable t
+  timevars <- data.frame(t = 1:100) %>%
+    mutate(lambda = l0_c + l1_c*t + l2_c*t^2 + l3_c*t^3) %>%
+    mutate(p = ifelse(t < 22, 1e-5, myprice),
+           omega = omega_c,
+           delta = 1,
+           alpha = alpha_c,
+           u = lambda + alpha*p ) 
+  
+  # solve the model for each individual with different shocks in parallel
+   pred_moments <- unique(simdata$id) %>% future_map_int(
+    ~simulate_person(.x, simdata, timevars, omega, myscale=epscale_c),
+    .options = furrr_options(seed = TRUE)
+  )
+  pred_moments_c <- tibble(id = unique(simdata$id), exit_day = pred_moments) %>% 
+    mutate(insnf = (exit_day >= myday)) %>% summarize(mean = mean(insnf)) %>% pull(mean)
+  pred_moments_c
+} 
+
+return_demand_t <- function(myprice) {
+# SECOND, DO THIS FOR THE TREATMENT (SICK SPOUSE) GROUP
+  # make a dataframe with 100 periods and a variable t
+  timevars <- data.frame(t = 1:100) %>%
+    mutate(lambda = l0_t + l1_t*t + l2_t*t^2 + l3_t*t^3) %>%
+    mutate(p = ifelse(t < 22, 1e-5, myprice),
+           omega = omega_t,
+           delta = 1,
+           alpha = alpha_t,
+           u = lambda + alpha*p ) 
+  
+  # solve the model for each individual with different shocks in parallel
+   pred_moments <- unique(simdata$id) %>% future_map_int(
+    ~simulate_person(.x, simdata, timevars, omega, myscale=epscale_t),
+    .options = furrr_options(seed = TRUE)
+  )
+  pred_moments_t <- tibble(id = unique(simdata$id), exit_day = pred_moments) %>% 
+     mutate(insnf = (exit_day >= myday)) %>% summarize(mean = mean(insnf)) %>% pull(mean)
+  pred_moments_t
+}
+
+# make a dataset of N individuals with unique shocks (drawn once for all iterations)
+simdata <- expand_grid(
+  id = 1:N,
+  t = 1:100
+) %>%
+  arrange(id, t) %>% 
+  mutate(eps_k = revd(n = (100*N), scale=1), 
+         eps_d = revd(n = (100*N), scale=1)) 
+
+# Vary across prices
+prices <- seq(from=0,to=2500,by=100)
+demand_c <- map_dbl(prices, return_demand_c)
+demand_t <- map_dbl(prices, return_demand_t)
+
+# Graph 
+tibble(
+  price = prices,
+  HealthySpouse = demand_c,
+  SickSpouse = demand_t
+) %>% 
+mutate(SickSpouse = SickSpouse * 1.191) %>%  # Scale by extensive margin differences across groups 
+  pivot_longer(cols = c(HealthySpouse, SickSpouse), 
+               names_to = "Group", 
+               values_to = "Demand") %>% 
+  ggplot(aes(x = Demand, y = price, color = Group)) +
+    geom_line(linewidth = 1.2) +
+    geom_point() +
+    theme_minimal() +
+    labs(
+      title = "Estimated Demand Curves: Day 21",
+      x = "Q",
+      y = "P",
+      color = "Group"
+    )
+```
+
+## Consumer Surplus
+    - Repeat demand analysis above for days 0 through 100 
+    - Estimate CS as area under the demand curve for each day 
+```{r cs}
+simulate_person <- function(p, simdata, timevars, omega, myscale) {
+  # Extract this person’s shocks from simdata and join with timevars.
+  local_timevars <- simdata %>%
+    filter(id == p) %>%
+    select(eps_d, eps_k, t) %>%
+    left_join(timevars, by = "t") %>%
+    # Scale the shocks accordingly.
+    mutate(eps_d = myscale * eps_d, 
+           eps_k = myscale * eps_k)
+  
+  # We assume the joined data is sorted in ascending order by t.
+  # Extract the required vectors.
+  u <- local_timevars$u
+  eps_d <- local_timevars$eps_d
+  eps_k <- local_timevars$eps_k
+  
+  # Call the Rcpp function which performs the heavy computations.
+  simulate_person_cpp(u, eps_d, eps_k, omega)
+}
+
+
+# Update functions to loop over days
+# rm(myprice, u)
+simulate_demand <- function(myprice,myday,
+                            l0,l1,l2,l3,omega_val,alpha_val,epscale_val) {
+  # make a dataframe with 100 periods and a variable t
+  timevars <- data.frame(t = 1:100) %>%
+    mutate(lambda = l0 + l1*t + l2*t^2 + l3*t^3) %>%
+    mutate(p = ifelse(t < 22, 1e-5, myprice),
+           omega = omega_val,
+           delta = 1,
+           alpha = alpha_val,
+           u = lambda + alpha*p ) 
+  
+  # solve the model for each individual with different shocks in parallel
+   pred_moments <- ids %>% map_int(
+    ~simulate_person(.x, simdata, timevars, omega_val, myscale=epscale_val))
+  tibble(id = ids, exit_day = pred_moments) %>% 
+    mutate(insnf = (exit_day >= myday)) %>% summarize(mean = mean(insnf)) %>% pull(mean)
+} 
+
+return_demand_c <- function(myprice, myday) { 
+  simulate_demand(myprice,myday, 
+                  l0_c,l1_c,l2_c,l3_c,
+                  omega_c,alpha_c, epscale_c)
+}
+return_demand_t <- function(myprice, myday) { 
+  simulate_demand(myprice,myday, 
+                  l0_t,l1_t,l2_t,l3_t,
+                  omega_t,alpha_t, epscale_t)
+  }
+
+# Create an explicit PSOCK cluster using available cores (minus one)
+cl <- makeCluster(detectCores() - 1)
+plan(cluster, workers=cl) 
+
+# Update simulate_person to use Rcpp to reduce bottleneck
+parallel::clusterEvalQ(cl, {
+  library(Rcpp)
+  library(tidyverse)
+  sourceCpp(paste0(path, "simulate_person.cpp", sep="")) 
+})
+clusterExport(cl, varlist = c("simulate_person", "simulate_demand", 
+                              "return_demand_c", "return_demand_t", 
+                              "simdata", "ids",
+                              # Export any constants or additional variables, e.g.:
+                              "l0_c", "l1_c", "l2_c", "l3_c", "omega_c", "alpha_c", "epscale_c",
+                              "l0_t", "l1_t", "l2_t", "l3_t", "omega_t", "alpha_t", "epscale_t"))
+
+# use the set of shocks drawn above
+ids <- unique(simdata$id)
+
+# Vary across prices *and days*
+output <- expand_grid(price = seq(from=0,to=2500,by=50),  
+                      day = 1:50) # TODO: extend to 100 days
+
+# Convert the grid into a list of rows
+grid_list <- split(output, seq(nrow(output)))
+
+# Use parLapply to loop over each row
+results <- parLapply(cl, grid_list, function(row) {
+  price <- row$price
+  day <- row$day
+  
+  # Call your demand functions
+  demand_c <- return_demand_c(price, day) * 0.01957
+  demand_t <- return_demand_t(price, day) * 0.02457
+    # Adjust for extensive margin responses in demand curves 
+  
+  # Return a small data.frame for this parameter set
+  data.frame(price = price, day = day, demand_c = demand_c, demand_t = demand_t)
+})
+
+# Combine the results into one data.frame
+final_results <- do.call(rbind, results)
+output <- final_results
+rm(final_results)
+
+# output <- output %>%
+#   mutate(
+#     demand_c = future_map2_dbl(price, day, ~ return_demand_c(.x, .y)),
+#     demand_t = future_map2_dbl(price, day, ~ return_demand_t(.x, .y))
+#   ) %>% mutate(demand_t = demand_t * 1.191) 
+
+# here's the nice version of the demand curve
+demandfig <- output %>% 
+    filter(day==22) %>% filter(price < 500) %>% 
+    filter(demand_c > 0 & demand_t > 0) %>% 
+    pivot_longer(cols = c(demand_c, demand_t),
+                 names_to = "Group",
+                 values_to = "Demand") %>% 
+    arrange(Demand) %>%
+    ggplot(aes(x = Demand*100, y = price, color = Group)) +
+    geom_line(linewidth = 1.2) +
+    geom_point() +
+    theme_minimal() +
+    labs(
+        title = paste0("Estimated Demand Curves: Day ", 22, sep=""),
+        x = "% of Outcome Spouses Demanding SNF Care",
+        y = "P",
+        color = "Group"
+    ) + geom_hline(yintercept = 37.5, linetype="dashed") +  
+  geom_text(aes(x = 1.65, y = 38, label = "Expected Price = $37.50"),
+            color = "black", vjust = -1) + 
+  scale_color_discrete(labels = c("Healthy Spouses", "Sick Spouses")) +
+  theme(axis.title.y = element_text(angle = 0, vjust = 0.5))
+
+
+# sense check: draw the demand curve again for each day
+for (d in 1:50) {
+demandfig <- output %>% 
+  filter(day==d) %>% 
+  filter(demand_c > 0 & demand_t > 0) %>% 
+  pivot_longer(cols = c(demand_c, demand_t),
+               names_to = "Group",
+               values_to = "Demand") %>% 
+  arrange(Demand) %>%
+  ggplot(aes(x = Demand*100, y = price, color = Group)) +
+    geom_line(linewidth = 1.2) +
+    geom_point() +
+    theme_minimal() +
+    labs(
+      title = paste0("Estimated Demand Curves: Day ", d, sep=""),
+      x = "Q",
+      y = "P",
+      color = "Group"
+    )
+ggsave(demandfig, 
+       file=paste0(path, "DemandCurve_Day",d,".png",
+                   sep="" ), width=8, height=4, dpi=300)
+}
+
+# Calculate CS per day by integrating over prices 
+  # Notes: for early days there's not a lot of demand variation -- set CS to be 0 when this happens
+test <- output %>% group_by(day) %>% arrange(demand_c) %>% 
+  mutate(cs_c = trapz(demand_c, price)*100,
+         cs_t = trapz(demand_t, price)*100) %>% 
+  select(day, cs_c, cs_t) %>% unique() # one observation per day
+
+test %>% pivot_longer(cols = c(cs_c, cs_t), 
+               names_to = "Group",
+               values_to = "CS") %>% 
+ggplot(aes(x=day, y=CS, color=Group)) + geom_point() + 
+  geom_line(linewidth=1.2) + theme_minimal() + 
+  scale_color_manual(values = c("skyblue2", "maroon3"), 
+                     labels = c("Healthy Spouse", "Sick Spouse")) +
+  labs(title = "Estimated CS by Day", 
+       x = "Day", 
+       y = "$", 
+       color="Group")
+
+# Now cumulative
+test %>% ungroup() %>% arrange(day) %>% mutate(cum_c = cumsum(cs_c), 
+                                  cum_t = cumsum(cs_t)) %>% 
+  pivot_longer(cols = c(cum_c, cum_t), 
+               names_to = "Group",
+               values_to = "CS") %>% 
+ggplot(aes(x=day, y=CS, color=Group)) + geom_point() + 
+  geom_line(linewidth=1.2) + theme_minimal() + 
+  scale_color_manual(values = c("skyblue2", "maroon3"), 
+                     labels = c("Healthy Spouse", "Sick Spouse")) +
+  labs(title = "Estimated Cumulative CS by Day", 
+       x = "Day", 
+       y = "$", 
+       color="Group")
+
+# What is ratio of cumulative CS over days?
+test %>% ungroup() %>% arrange(day) %>% mutate(cum_c = cumsum(cs_c), 
+                                  cum_t = cumsum(cs_t)) %>% 
+  pivot_longer(cols = c(cum_c, cum_t), 
+               names_to = "Group",
+               values_to = "CS") %>% 
+  mutate(ratio = ifelse(cs_c == 0, 1, cs_t / cs_c)) %>%
+ggplot(aes(x=day, y=ratio)) + geom_point() + 
+  geom_line(linewidth=1.2) + theme_minimal() + 
+  geom_hline(yintercept = 3.10, linetype='dashed') + 
+  labs(title = "Ratio of Treated:Control Cumulative CS by Day", 
+       x = "Day", 
+       y = "")
+```
+
+## Ratio of Utilities (Policy) 
+What if we could think about moving either when deductibles started or the amount of coinusrance? How would this change ratio of utilities at the day when copayments start?
+
+```{r policy-variation}
+# First, let's fix the price at 37.50 and just move when it "turns on" 
+# If you make this utilities on day of copayment, that doesn't change much across groups
+# If you make it utilities on day 22, then it doesn't change at all except discretely
+# So take cumulative expected utility from day 1 to day 
+ratio_days <- function(day, treated=FALSE) { 
+  if (treated == TRUE) { 
+    # return(l0_t + l1_t*day + l2_t*(day)^2 + l3_t*(day)^3 + alpha_t * 37.50) # one day
+    return(l0_t * day + (l1_t * day * (day + 1) / 2) + (l2_t * day * (day + 1) * (2*day + 1) / 6) + (l3_t * (day * (day + 1) / 2)^2) + alpha_t * 37.50) # cumulative u
+  } else if (treated == FALSE) {
+  # return(l0_c + l1_c*day + l2_c*(day)^2 + l3_c*(day)^3 + alpha_c * 37.50) # one day 
+    return(l0_c * day + (l1_c * day * (day + 1) / 2) + (l2_c * day * (day + 1) * (2*day + 1) / 6) + (l3_c * (day * (day + 1) / 2)^2) + alpha_c * 37.50)# cumulative u
+  } 
+  # return((u_t-u_c)/abs(u_c)*100)
+}
+
+days <- seq(from=10,to=40,by=1)
+ratios_c <- ratio_days(days, treated = FALSE)
+ratios_t <- ratio_days(days, treated = TRUE)
+data.frame(cbind(days,Treatment=ratios_t, Control=ratios_c)) %>% 
+  pivot_longer(
+    cols      = c(Treatment, Control),
+    names_to  = "Group",
+    values_to = "ratio"
+  ) %>%
+  ggplot(aes(x=days,y=ratio,color=Group,fill=Group)) + 
+  geom_point() + 
+  theme_minimal() + 
+  geom_vline(xintercept = 21.5, linetype='dashed') + 
+  labs(x="Day Copayments Start", y="Cumulative Utilities", fill="Group")
+
+
+
+# Secon, let the coinusrance rate vary and keep it fixed at day 22
+ratio_price <- function(price, treated=FALSE) { 
+  if (treated == TRUE) { 
+    return(l0_t + l1_t*22 + l2_t*(22)^2 + l3_t*(22)^3 + alpha_t * 187.5*price)
+  } else if (treated == FALSE) {
+  return(l0_c + l1_c*22 + l2_c*(22)^2 + l3_c*(22)^3 + alpha_c * 1875*price)
+  } 
+  # return((u_t-u_c)/abs(u_c)*100)
+}
+
+prices <- seq(from=0,to=1,by=.025)
+ratios_c <- ratio_price(prices, treated = FALSE)
+ratios_t <- ratio_price(prices, treated = TRUE)
+data.frame(cbind(prices,Treatment=ratios_t, Control=ratios_c)) %>% 
+  pivot_longer(
+    cols      = c(Treatment, Control),
+    names_to  = "Group",
+    values_to = "ratio"
+  ) %>%
+  ggplot(aes(x=prices,y=ratio,color=Group,fill=Group)) + 
+  geom_point() + 
+  geom_vline(xintercept = 0.2, linetype='dashed') + 
+  theme_minimal() + 
+  labs(x="Cost Sharing %", y="Utilities", fill="Group")
+```
+
+## Counterfactuals
+
+The process is: 
+    1. Use equilibrium parameters for a given group ($T, C$) and a price scheme to estimate how many days a person stays in a SNF, conditional on entry. 
+    2. This gives you an average expected valuation on intensive margin, $V(t)$
+    3. This can be scaled by the price coefficient $\alpha$ to recover dollar values. 
+    4. From there, unconditional averages are calculated by scaling on the extensive margin (0.01957 for the healthy group, 0.02457 for the sick group)
+    5. Counterfactuals are run by varying the price schedule for each group.
+    
+```{r counterfactuals-old}
+# Parameters to specify
+load(paste0(mypath, "FullSimulations_20250415.RData", sep=""))
+N <- 10000 # how many individuals to sample
+treated <- TRUE # which group are we doing here?
+myprice_pre <- 0 # vary this for counterfactuals (0, 37.5, 187.50)
+myprice_post <- 37.5 # vary this for counterfactuals (0, 37.5, 187.50)
+# sourceCpp(paste0(path, "simulate_person_value.cpp", sep=""), rebuild = TRUE) 
+# sourceCpp(paste0(path, "simulate_person.cpp", sep=""), rebuild = TRUE) 
+
+if (treated == TRUE) { 
+  epscale_val <- epscale_t
+  omega_val <- omega_t
+  alpha_val <- alpha_t
+  l0 <- l0_t
+  l1 <- l1_t
+  l2 <- l2_t
+  l3 <- l3_t
+} else { 
+  epscale_val <- epscale_c
+  omega_val <- omega_c
+  alpha_val <- alpha_c
+  l0 <- l0_c
+  l1 <- l1_c
+  l2 <- l2_c
+  l3 <- l3_c
+  }
+
+# First, want to know how consumer max utility changes with price 
+# make a dataset of N individuals with unique shocks (drawn once for all iterations)
+simdata <- expand_grid(
+  id = 1:N,
+  t = 1:100
+) %>%
+  arrange(id, t) %>% 
+  mutate(eps_k = epscale_val*revd(n = (100*N), scale=1), 
+         eps_d = epscale_val*revd(n = (100*N), scale=1)) %>% 
+    mutate(lambda = l0 + l1*t + l2*t^2 + l3*t^3) %>%
+    mutate(p = ifelse(t < 22, myprice_pre, myprice_post),
+           omega = omega_val,
+           delta = 1,
+           alpha = alpha_val,
+           u = lambda + alpha*p )
+
+# predict exit day for each person
+preds <- data.frame(value=simulate_all_value_cpp(
+  id     = simdata$id,
+  u      = simdata$u,
+  eps_d  = simdata$eps_d,
+  eps_k  = simdata$eps_k,
+  omega  = simdata$omega
+), id=1:N, 
+exit_day=simulate_all_cpp(
+  id     = simdata$id,
+  u      = simdata$u,
+  eps_d  = simdata$eps_d,
+  eps_k  = simdata$eps_k,
+  omega  = simdata$omega
+)) %>% filter(exit_day < 75) %>% # trim tails
+  mutate(value = value/abs(alpha_val)) %>% # convert from utils to dollars 
+  mutate(cost = exit_day * myprice_pre + pmax(exit_day-21, 0) * (myprice_post-myprice_pre)) %>% 
+  mutate(netvalue = pmax(value - cost,0))
+
+# unconditional value: 
+if (treated == FALSE) { 
+  preds <- preds %>% filter(netvalue > 0) %>% mutate(netvalue = netvalue * 0.01957)
+  mean(preds$netvalue) # in base case, this is $24.74
+    # with full insurance, this jumps up to $103.58 (318.7% increase)
+   # at $37.50 every day this is $10.37
+} else if (treated == TRUE) {
+  preds <- preds %>% filter(netvalue > 0) %>% mutate(netvalue = netvalue * 0.02457)
+  mean(preds$netvalue) # in base case, this is $190.18 (7.7 times higher)
+    # with full insurance, this jumps up to $250.34 (31.6% increase)
+  # at $37.50 every day this is $162.17
+}
+
+# Counterfactuals here are: 
+```
+
+### OLD CODE
+```{r value-with-shocks, eval=FALSE, echo = FALSE}
+timevars <- timevars %>% mutate(V_t = ifelse(t==100, u_t, NA),
+                                V_c = ifelse(t==100, u_c, NA))
+
+# transform shocks and calculate 
+timevars <- timevars %>% mutate(eps_d_t = epscale_t*eps_d, 
+                               eps_k_t = epscale_t*eps_k,
+                               eps_d_c = epscale_c*eps_d, 
+                               eps_k_c = epscale_c*eps_k)
+for (d in 99:1) { # backward loop
+  timevars <- timevars %>% 
+    mutate(V_t = ifelse(t==d, u_t + pmax(eps_k_t + delta*lead(EV_t), eps_d_t), V_t),
+           V_c = ifelse(t==d, u_c + pmax(eps_k_c + delta*lead(EV_c), eps_d_c), V_c))
+}
+
+# Plot
+ggplot(timevars, aes(x=t)) + 
+  geom_point(aes(y=V_t, color='Sick Spouse Group'), size=2) +
+  geom_point(aes(y=V_c, color='Healthy Spouse Group'), size=2) +
+  theme_minimal() + 
+  labs(x = "Days in SNF", y = "", subtitle="Value With Shocks(t)", color=NULL) + 
+  geom_hline(yintercept = 0) + 
+  theme(legend.position="inside",
+      legend.position.inside = c(0.01, 0.99),       # top-left corner inside the plot area
+      legend.justification = c("left", "top"))
+```
+
+```{r exit-choice, eval=FALSE, echo=FALSE}
+timevars <- timevars %>% mutate(cumV_t = cumsum(V_t),
+                                cumV_c = cumsum(V_c))
+ggplot(timevars, aes(x=t)) + 
+  geom_point(aes(y=cumV_t, color='Sick Spouse Group'), size=2) +
+  geom_point(aes(y=cumV_c, color='Healthy Spouse Group'), size=2) +
+  theme_minimal() + 
+  labs(x = "Days in SNF", y = "", subtitle="Cumulative Value(t)", color=NULL) + 
+  geom_hline(yintercept = 0) + 
+  theme(legend.position="inside",
+      legend.position.inside = c(0.01, 0.99),       # top-left corner inside the plot area
+      legend.justification = c("left", "top"))
+```
+
