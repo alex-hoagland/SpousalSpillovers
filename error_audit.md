@@ -62,8 +62,8 @@ Suggested fix: Replace each `dgnscd1` inside the loop body with `dgnscd\`i''` so
 
 4. `Appendix/Appendix_EventStudy_weeks_MEDPAR.do:40-46`
 Severity: High  
-Problem: The weekly appendix script uses `reltime_w`, which is never created.  
-Why it is risky: The file only has `reltime_weeks`, so the window restriction, event-time recoding, and `gcollapse` keys all fail before the weekly figure is estimated.  
+Problem: The weekly appendix script references `reltime_w`, which is never explicitly created — only `reltime_weeks` exists in the file.  
+Why it is risky: Under Stata's default `set varabbrev on`, `reltime_w` resolves to `reltime_weeks` because no other variable shares that prefix, so the script can still run. However, the project convention (see CLAUDE.md template) is `set varabbrev off`, and if that is ever enabled, the window restriction, event-time recoding, and `gcollapse` keys will all fail. The inconsistent naming is fragile and should be fixed.  
 Suggested fix: Replace each `reltime_w` reference with `reltime_weeks`.
 
 5. `4_MainEventStudy_MDS.do:19-29`, `6_MainEventStudy_FatalitySplit_MDS.do:20,48-56,90-96`, `7a_SplitEffects_ChronicCondition_MDS.do:18,121-138`, `7b_SplitEffects_IndexDischarge_MDS.do:20,108-126`, `Appendix/Appendix_SplitEffects_IndexLOS_MDS.do:18,109-129`
