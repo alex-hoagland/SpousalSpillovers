@@ -12,11 +12,7 @@
 
 ***** Main Regression , split by if husband has chronic condition or not 
 use "${input_datapath}/weekpanel.dta" , clear 
-// use "${input_datapath}/weekpanel_1p.dta" , clear 
-	
-// keep only households where outcome spouse lives for at least a year post-event
-drop if nosurvive == 1
-	
+
 // aggregate to monthly level 
 gen reltime_months = floor(reltime_weeks/4)
 gen workingdate = eventdate_index + 30*reltime_months
@@ -30,6 +26,17 @@ gen treated_post = (treated == 1 & reltime_weeks >= 0)
 gen tt = reltime_months + 4 // makes regression code easier to have no negative values here -- note that 3 is now the base period (-1 + 4 = 3)
 keep if inrange(reltime_months, -5, 12) 
 replace tt = 3 if reltime_months <= -5 // additional reference points
+
+if ("`2'" == "balanced" ) {
+	cap drop bene_id
+	gen bene_id = response_id
+	merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
+	gen test = death_dt - eventdate_index
+	gen todrop = (!missing(death_dt) & test <= 365)
+	bys index_id response_id: ereplace todrop = max(todrop)
+	drop if todrop == 1
+	drop test todrop
+}
 
 //
 // gen test = runiform() 
@@ -62,7 +69,7 @@ foreach y of local allyears {
 bys response_id eventid: ereplace any_chronic = max(any_chronic) // ~40% of sample
 
 gcollapse (max) `1' treated* any_chronic index_fem, by(index_id hhid eventid ym tt reltime_months ) fast
-sum `1' if (treated == 1 & reltime_ < 0)
+sum `1' if (treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000
 replace `1' = `1' / `premean' // * 100 // rescale coefficients to be % of outcome
@@ -118,9 +125,9 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	xsc(r(-4(2)12)) xlab(-4(2)12) ///
 	subtitle("Spillover Effect, by Spillover Spouse Health", ///
 		position(11) justification(left) size(medsmall)) 
-graph save "${output_path}/SplitEffects_ChronicCondition_`1'_$today.gph", replace
-graph export "${output_path}/SplitEffects_ChronicCondition_`1'_$today.png", as(png) replace
-graph export "${output_path}/SplitEffects_ChronicCondition_`1'_$today.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/SplitEffects_ChronicCondition_`1'_$today.gph", replace
+graph export "${hoaglandoutput}/SplitEffects_ChronicCondition_`1'_$today.png", as(png) replace
+graph export "${hoaglandoutput}/SplitEffects_ChronicCondition_`1'_$today.pdf", as(pdf) replace
 
 twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	(scatter coef reltime if model == 1, color(ebblue) msymbol(square)) ///
@@ -133,12 +140,11 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	xsc(r(-4(2)12)) xlab(-4(2)12) ///
 	subtitle("Spillover Effect, by Spillover Spouse Health", ///
 		position(11) justification(left) size(medsmall)) 
-graph save "${output_path}/SplitEffects_ChronicCondition_`1'_v2_$today.gph", replace
-graph export "${output_path}/SplitEffects_ChronicCondition_`1'_v2_$today.png", as(png) replace
-graph export "${output_path}/SplitEffects_ChronicCondition_`1'_v2_$today.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/SplitEffects_ChronicCondition_`1'_v2_$today.gph", replace
+graph export "${hoaglandoutput}/SplitEffects_ChronicCondition_`1'_v2_$today.png", as(png) replace
+graph export "${hoaglandoutput}/SplitEffects_ChronicCondition_`1'_v2_$today.pdf", as(pdf) replace
 ********************************************************************************
 
 // clean up data
 rm "$input_datapath/figdata_chronic.dta"
 rm "$input_datapath/figdata_nochronic.dta"
-

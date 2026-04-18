@@ -11,6 +11,37 @@
 *******************************************************************************/
 
 ***** DDisc regressions
+capture confirm file "${input_datapath}/RDdata_fullyear.dta"
+if _rc {
+	use "${input_datapath}/responseevents-MEDPAR.dta" if snf == 1, clear
+	gen los = response_ds - response_eventdt + 1
+	drop if missing(los)
+	expand 2, generate(treated)
+	merge m:1 bene_id treated using "${input_datapath}/indexevents_mergedspouses_eligible.dta", keep(3) nogenerate
+	gen elapse = response_eventdt - eventdate_index if !missing(response_eventdt)
+	keep if inrange(elapse, 0, 365)
+	gen treated_post = (inrange(elapse, 0, 365) & treated == 1)
+	expand los
+	gen insnf = 1
+	bys response_id index_id eventid hhid response_eventdt: gen day = _n
+	drop if day > 150
+	egen id = group(response_id index_id eventid treated* response_eventdt)
+	fillin id day
+	gsort id _fillin
+	bys id: carryforward response_id index_id eventid hhid eventdate_index response_eventdt response_ds treated* los elapse, replace
+	replace insnf = 0 if missing(insnf)
+	drop _fillin id
+	gen month = month(response_eventdt)
+	gen year = year(response_eventdt)
+	gen ym = ym(year, month)
+	gen dow = dow(eventdate_index + day)
+	forvalues d = 0/6 {
+		gen dow_`d' = (dow == `d')
+	}
+	compress
+	save "${input_datapath}/RDdata_fullyear.dta", replace
+}
+
 use "$input_datapath/RDdata_fullyear.dta", clear  
 drop if inrange(elapse, -400, -1e-2) // don't need these, just the post-event data for the treated =0 group
 drop if treated == 0 & elapse >= 122 

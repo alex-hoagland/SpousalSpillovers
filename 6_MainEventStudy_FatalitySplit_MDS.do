@@ -14,10 +14,12 @@
 	
 ***** Main Regression 
 use "${input_datapath}/weekpanel.dta" , clear 
-// use "${input_datapath}/weekpanel_1p.dta" , clear 
-	
-// keep only households where outcome spouse lives for at least a year post-event
-drop if nosurvive == 1
+local outcome "`1'"
+local sample "`2'"
+if ("`sample'" == "") {
+	local sample "`1'"
+	local outcome "snf"
+}
 	
 // aggregate to monthly level 
 gen reltime_months = floor(reltime_weeks/4)
@@ -33,27 +35,38 @@ gen tt = reltime_months + 4 // makes regression code easier to have no negative 
 keep if inrange(reltime_months, -5, 12) 
 replace tt = 3 if reltime_months <= -5 // additional reference points
 
-gcollapse (max) `1' treated* index_fem fatal_*, by(index_id hhid eventid ym tt reltime_months ) fast
+if ("`sample'" == "balanced" ) {
+	cap drop bene_id
+	gen bene_id = response_id
+	merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
+	gen test = death_dt - eventdate_index
+	gen todrop = (!missing(death_dt) & test <= 365)
+	bys index_id response_id: ereplace todrop = max(todrop)
+	drop if todrop == 1
+	drop test todrop
+}
+
+gcollapse (max) `outcome' treated* index_fem fatal_*, by(index_id hhid eventid ym tt reltime_months ) fast
 
 // gen test = runiform() 
 // bys Shock_id: ereplace test = mean(test) 
 // keep if (test < .5 & treated == 0) | (test >= .5 & treated == 1) 
 
-sum `1' if treated == 1 & reltime < 0
-replace `1' = `1' / `r(mean)'
+sum `outcome' if treated == 1 & reltime_months < 0
+replace `outcome' = `outcome' / `r(mean)'
 
 // run regression
-reghdfe `1' ib3.tt##i.treated if fatal_1year  == 1, ///
+reghdfe `outcome' ib3.tt##i.treated if fatal_1year  == 1, ///
 	absorb(eventid ym) cluster(hhid)	
-regsave using "$output_path/fatalshock", replace ci p 
-reghdfe `1' ib3.tt##i.treated if fatal_1year == 0, ///
+regsave using "${input_datapath}/fatalshock", replace ci p
+reghdfe `outcome' ib3.tt##i.treated if fatal_1year == 0, ///
 	absorb(eventid ym) cluster(hhid)
-regsave using "$output_path/nonfatalshock",  replace ci p 
+regsave using "${input_datapath}/nonfatalshock",  replace ci p
 
 preserve
-use "$output_path/fatalshock", clear
+use "${input_datapath}/fatalshock", clear
 gen model = 1 
-append using "$output_path/nonfatalshock"
+append using "${input_datapath}/nonfatalshock"
 replace model = 0 if missing(model)
 
 // make figure			
@@ -87,12 +100,12 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	subtitle("Spillover Effect, by Shock Fatality", ///
 		position(11) justification(left) size(medsmall)) ///
 	legend(order(2 "Nonfatal Shock" 3 "Fatal Shock") rows(1) ring(0) position(11))
-graph save "${output_path}/EventStudy_`1'_fatalnonfatalshock-1year_$today.gph", replace
-graph export "${output_path}/EventStudy_`1'_fatalnonfatalshock-1year_$today.png", as(png) replace
-graph export "${output_path}/EventStudy_`1'_fatalnonfatalshock-1year_$today.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/EventStudy_`outcome'_fatalnonfatalshock-1year_$today.gph", replace
+graph export "${hoaglandoutput}/EventStudy_`outcome'_fatalnonfatalshock-1year_$today.png", as(png) replace
+graph export "${hoaglandoutput}/EventStudy_`outcome'_fatalnonfatalshock-1year_$today.pdf", as(pdf) replace
 
 // clean up data
-rm "$output_path/fatalshock.dta"
-rm "$output_path/nonfatalshock.dta"
+rm "${input_datapath}/fatalshock.dta"
+rm "${input_datapath}/nonfatalshock.dta"
 
 ********************************************************************************

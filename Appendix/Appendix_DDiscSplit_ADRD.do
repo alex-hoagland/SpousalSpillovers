@@ -11,6 +11,13 @@
 
 *******************************************************************************/
 
+capture confirm file "${input_datapath}/ADRDdx.dta"
+if _rc {
+	use bene_id adrd_admit adrd_disc using "${input_datapath}/responseevents-MEDPAR.dta", clear
+	gcollapse (max) test = adrd_admit adrd_disc, by(bene_id) fast
+	save "${input_datapath}/ADRDdx.dta", replace
+}
+
 use bene_id test using "${input_datapath}/ADRDdx.dta", clear
 gcollapse (max) hasadrd=test, by(bene_id) fast // 1m individuals
 rename bene_id response_id 

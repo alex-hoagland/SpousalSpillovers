@@ -192,7 +192,7 @@ egen tot_pmt = rowtotal(*pmt)
 // inflation adjust and topcode all spending
 gen year = file_year
 
-qui do "/disk/agedisk3/medicare.work/layton-DUA54204/WorkingDatasets/Replication_Package/code/swap-indexevents/Inflation.do" "tot_pmt"
+qui do "${allcode}/Inflation.do" "tot_pmt"
 
 replace tot_pmt = 250000 if tot_pmt > 250000 & !missing(tot_pmt)
 drop test* ptd* phys* othc* ptb* oproc* img* hos* hop* hh* dial* em* asc* anes* 
@@ -205,7 +205,33 @@ gen fem = (sex == "2")
 gen white = (race == "1")
 gen black = (race == "2")
 gen hispanic = (race == "5")
-gen other_race = (white != 1 & black ! = 1 & hispanic != 1)
+gen other_race = (white != 1 & black != 1 & hispanic != 1)
+
+preserve
+keep bene_id file_year
+duplicates drop
+tempfile sample_benes
+save `sample_benes', replace
+restore
+
+preserve
+use "${input_datapath}/lasso_prob_snf_3folds.dta", clear
+capture confirm variable l_pred_prob
+if _rc {
+	local predicted_var prob_snf
+}
+else {
+	local predicted_var l_pred_prob
+}
+keep bene_id file_year `predicted_var'
+drop if missing(file_year)
+gcollapse (mean) predicted_snf = `predicted_var', by(bene_id file_year) fast
+tempfile predicted_snf
+save `predicted_snf', replace
+restore
+
+merge m:1 bene_id file_year using `predicted_snf', keep(1 3) nogenerate
+replace predicted_snf = 0 if missing(predicted_snf)
 
 local months 01 02 03 04 05 06 07 08 09 10 11 12
 foreach i of local months {
@@ -227,7 +253,7 @@ replace hosp_no = hosp_no + oip_stays if oip_stays > 0 & !missing(oip_stays)
 replace hosp_no = oip_stays if missing(hosp_no) & oip_stays > 0 & !missing(oip_stays)
 
 macro drop sum_* 
-foreach v of varlist fem white black hisp other is_* any_chronic tot_pmt snf* hosp* age year { // keep year last to get the N right 
+foreach v of varlist fem white black hispanic other_race is_* any_chronic predicted_snf tot_pmt snf* hosp* age year { // keep year last to get the N right
 	sum `v' if group == 0 //index_id
 	global sum_`v'_0: di %9.2fc `r(mean)'
 	global sum_`v'_0_se: di %4.3fc `r(sd)'/sqrt(`r(N)')
@@ -272,8 +298,8 @@ tex \midrule
 tex \multicolumn{3}{l}{\textbf{Panel B: Healthcare Utilization}} \\
 tex Has a Chronic Condition & ${sum_any_chronic_0} & ${sum_any_chronic_1} \\ 
 tex & (${sum_any_chronic_0_se}) & (${sum_any_chronic_1_se}) \\
-tex Predicted Risk(SNF Stay) & \textcolor{red}{TK} & \textcolor{red}{TK}  \\ 
-tex & (\textcolor{red}{TK}) & (\textcolor{red}{TK}) \\
+tex Predicted Risk(SNF Stay) & ${sum_predicted_snf_0} & ${sum_predicted_snf_1}  \\
+tex & (${sum_predicted_snf_0_se}) & (${sum_predicted_snf_1_se}) \\
 tex SNF Stay, Any & ${sum_snf_0} & ${sum_snf_1} \\ 
 tex & (${sum_snf_0_se}) & (${sum_snf_1_se}) \\
 tex Conditional \# of SNF Stays & ${sum_snf_no_0} & ${sum_snf_no_1} \\ 
@@ -298,4 +324,3 @@ tex \end{minipage}
 tex \end{table}
 texdoc close 
 ********************************************************************************
-

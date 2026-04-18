@@ -44,14 +44,14 @@ forvalues year = 2010/2016 {
 
 use "$input_datapath/affected_SNFstays.dta", clear
 cap drop year 
-gen year = year(response_event)
-gen month = month(response_event)
+gen year = year(response_eventdt)
+gen month = month(response_eventdt)
 gen ym = ym(year, month)
 keep response_id ym los cvrlvldt
 gcollapse (sum) los (max) cvrlvldt, by(response_id ym) fast // aggregate at person-month level 
 compress
 save "$input_datapath/affected_SNFstays.dta", replace
-********************************************************************************/
+********************************************************************************
 
 
 ***** Regression 1: Average LOS by month of admission *****
@@ -98,8 +98,9 @@ gcollapse (mean) snf_los (max) past_coverage treated* index_fem, ///
 foreach outcome of var snf_los past_coverage { 
 	
 	preserve
-	sum `outcome' if (treated == 1 & reltime_ < 0)
+	sum `outcome' if (treated == 1 & reltime_months < 0)
 	local premean: di %5.4fc `r(mean)'
+	local textmean: di %3.1fc `r(mean)' * 1000
 	replace `outcome' = `outcome' / `premean' // * 100 // rescale coefficients to be % of outcome
 
 // 	gen test = runiform() 
@@ -182,4 +183,3 @@ foreach outcome of var snf_los past_coverage {
 // 		restore
 // 	}
 ********************************************************************************
-

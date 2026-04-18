@@ -82,7 +82,6 @@ if ("`2'" == "balanced" ) {
 }
 
 gcollapse (max) `1' treated* index_fem fatal*, by(index_id hhid eventid ym tt reltime_months ) fast
-local 1 = "fall"
 sum `1' if (treated == 1 & reltime_ < 0)
 local premean: di %7.6fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000
@@ -106,8 +105,8 @@ replace reltime = reltime - 4
 keep if reltime == 0 
 gen model = "`1'"
 gen type = 0 // all 
-append using "$hoaglandoutput/5_HealthEffectsTable.dta"
-save "$hoaglandoutput/5_HealthEffectsTable.dta", replace
+append using "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta"
+save "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta", replace
 restore
 
 // run regression: fatal
@@ -124,8 +123,8 @@ replace reltime = reltime - 4
 keep if reltime == 0 
 gen model = "`1'"
 gen type = 1 // fatal 
-append using "$hoaglandoutput/5_HealthEffectsTable.dta"
-save "$hoaglandoutput/5_HealthEffectsTable.dta", replace
+append using "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta"
+save "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta", replace
 restore
 
 // run regression: nonfatal
@@ -142,8 +141,8 @@ replace reltime = reltime - 4
 keep if reltime == 0 
 gen model = "`1'"
 gen type = 2 // nonfatal 
-append using "$hoaglandoutput/5_HealthEffectsTable.dta"
-save "$hoaglandoutput/5_HealthEffectsTable.dta", replace
+append using "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta"
+save "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta", replace
 restore
 ********************************************************************************
 

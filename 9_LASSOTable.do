@@ -91,7 +91,7 @@ replace tt = 3 if reltime_months <= -5 // additional reference point for regress
 // 	reghdfe hospitalization i.post##i.treated, ///
 // 		absorb(eventid ym) cluster(hhid)
 		
-	reghdfe hospital ib3.tt##i.treated, ///
+	reghdfe hospitalization ib3.tt##i.treated, ///
 		absorb(eventid ym) cluster(hhid)
 	regsave using "$input_datapath/regdata_probsnf_levels", p ci replace
 	

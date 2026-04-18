@@ -10,23 +10,18 @@
 	- now needs to be run through the mastre file to accommodate multiple outcomes
 	- pooled across spouses
 *******************************************************************************/
-// macro drop _all 
-//
-// version 15 // so that .gph files save in a way my old machine can read
-// // set maxvar 100000
-// // ssc install ereplace
-//
-global project_head "/homes/nber/kwtjima-dua58151/layton-DUA58151"
-global head "$project_head/kwtjima-dua58151"
-global allcode"$head/code/jimmy"
-global input_datapath "$head/data/derived"
-global input_rawdatapath "$head/data/raw"
-global input_datapath_branch "$head/data/derived"
-global kwtjimaoutput "$head/output"
-global main_eventstudy "$input_datapath_branch/main_eventstudy.dta"
-global main_eventstudy_1p "$input_datapath_branch/main_eventstudy_1p.dta"
-	
-use "${main_eventstudy}", clear
+use "${input_datapath}/weekpanel.dta", clear
+
+cap drop bene_id
+gen bene_id = response_id
+
+gen reltime_months = floor(reltime_weeks/4)
+gen workingdate = eventdate_index + 30*reltime_months
+gen wknum = month(workingdate)
+cap drop year
+gen year = year(workingdate)
+replace year = year - 1 if treated == 0
+gen ym = ym(year, wknum)
 
 // keep only households where outcome spouse lives for at least a year post-event
 gen test = death_dt - eventdate_index
@@ -228,9 +223,9 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	xsc(r(-4(2)12)) xlab(-4(2)12) ///
 	subtitle("Spillover Effect, Relative to Baseline Mean (`textmean'/1,000)", ///
 		position(11) justification(left) size(medsmall)) 
-graph save "${kwtjimaoutput}/EventStudy_`test'_$today_requiresurvival.gph", replace
-graph export "${kwtjimaoutput}/EventStudy_`test'_$today_requiresurvival.png", as(png) replace
-graph export "${kwtjimaoutput}/EventStudy_`test'_$today_requiresurvival.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/EventStudy_`test'_$today_requiresurvival.gph", replace
+graph export "${hoaglandoutput}/EventStudy_`test'_$today_requiresurvival.png", as(png) replace
+graph export "${hoaglandoutput}/EventStudy_`test'_$today_requiresurvival.pdf", as(pdf) replace
 
 restore 
 }

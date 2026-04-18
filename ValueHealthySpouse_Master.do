@@ -40,7 +40,7 @@ do "$allcode/2_ResponseEvents_MEDPAR.do" // identify all response events using t
 do "$allcode/2_ResponseEvents_MDS.do" // identify all response events using the MDS file 
 do "${allcode}/2a_ResponseEvents_ED.do" // all ED visits 
 do "${allcode}/2b_ResponseEvents_mortality.do" // mortality 
-do "${allcode}/2c_ResponseEvents_falls.do" // falls
+do "${allcode}/2c_ResponseEvents_Falls.do" // falls
 do "${allcode}/3_ConstructPanel.do"
 ********************************************************************************
 
@@ -65,11 +65,11 @@ do "$allcode/5_HealthEffectsTable_MEDPAR.do" "hospitalization" "balanced"
 do "$allcode/5_HealthEffectsTable_MEDPAR.do" "fall" "balanced" 
 do "$allcode/5_HealthEffectsTable_MEDPAR.do" "num_ED" "balanced"
 do "$allcode/5_HealthEffectsTable_MEDPAR.do" "snf_hosp" "balanced"
-do "$allcode/5b_HealthEffectsTable_AverageEffects.do" "snf" "balanced" // average effects run separately for speed
-do "$allcode/5b_HealthEffectsTable_AverageEffects.do" "hospitalization" "balanced"
-do "$allcode/5b_HealthEffectsTable_AverageEffects.do" "num_ED" "balanced"
-do "$allcode/5b_HealthEffectsTable_AverageEffects.do" "fall" "balanced" 
-do "$allcode/5b_HealthEffectsTable_AverageEffects.do" "snf_hosp" "balanced"
+do "$allcode/5b_HealthEffectsTable_AverageEffects_MEDPAR.do" "snf" "balanced" // average effects run separately for speed
+do "$allcode/5b_HealthEffectsTable_AverageEffects_MEDPAR.do" "hospitalization" "balanced"
+do "$allcode/5b_HealthEffectsTable_AverageEffects_MEDPAR.do" "num_ED" "balanced"
+do "$allcode/5b_HealthEffectsTable_AverageEffects_MEDPAR.do" "fall" "balanced"
+do "$allcode/5b_HealthEffectsTable_AverageEffects_MEDPAR.do" "snf_hosp" "balanced"
 do "$allcode/5a_MakeTable_MEDPAR.do" // produces tex code for table 
 
 // Figure 3: split by fatal/nonfatal 
@@ -124,10 +124,10 @@ do "$allcode/Appendix/Appendix_Robustness_No2YearRequirement_MEDPAR.do" // -- ba
 do "$allcode/Appendix/Appendix_MainEventStudy_gendersplit_MEDPAR.do" "snf" 
 
 // Figure A5: weekly results
-do "$allcode/Appendix_EventStudy_weeks_MEDPAR.do" "snf" "balanced"
+do "$allcode/Appendix/Appendix_EventStudy_weeks_MEDPAR.do" "snf" "balanced"
 
 // Figure A6: Long-run results
-do "$allcode/Appendix_LongrunResults_MEDPAR.do" 
+do "$allcode/Appendix/Appendix_LongrunResults_MEDPAR.do"
 
 // Figure A7: made above
 

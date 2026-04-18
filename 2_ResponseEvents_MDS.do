@@ -11,23 +11,20 @@ the analysis dataset
 * NOTES: 
 	
 *******************************************************************************/
-macro drop _all 
-
 version 15 // so that .gph files save in a way my old machine can read
 // set maxvar 100000
 // ssc install ereplace
 
-global project_head "/homes/nber/kwtjima-dua58151/layton-DUA58151"
-global head "$project_head/kwtjima-dua58151"
-global allcode"$head/code/jimmy"
-global input_datapath "$head/data/derived"
-global input_rawdatapath "$head/data/raw"
-global input_datapath_branch "$head/data/derived"
-global kwtjimaoutput "$head/output"
-// global olddata "/disk/agedisk3/medicare.work/layton-DUA54204/WorkingDatasets/kcp-work/spousal_spillover/derived_local/female_index_events" // for replication purposes only
+if `"`input_datapath'"' == "" {
+	global project_head "/homes/nber/kwtjima-dua58151/layton-DUA58151"
+	global head "$project_head/kwtjima-dua58151"
+	global input_datapath "$head/data/derived"
+}
 
-global today: di %td_CYND date("$S_DATE", "DMY")
-global today $today // second command removes leading spaces 
+if `"`today'"' == "" {
+	global today: di %td_CYND date("$S_DATE", "DMY")
+	global today $today // second command removes leading spaces
+}
 
 // set scheme cblind1
 set seed 081323
@@ -37,12 +34,12 @@ set seed 081323
 ********************************************************************************
 
 // Path to cleaned dataset
-global raw_stacked_mds "${input_datapath}/responseevents-stacked-MDS.dta"
-global cleaned_mds "${input_datapath}/responseevents-MDS.dta"
-global raw_stacked_mds_backup "${input_datapath}/responseevents-MDS_backup.dta"
-global mds "$project_head/extracts/mds/20220808/100pct"
-global cleaned_stays "${input_datapath}/MDS-stays.dta"
-global cleaned_stays_1p "${input_datapath}/MDS-stays_1p.dta"
+if `"$raw_stacked_mds"' == "" global raw_stacked_mds "${input_datapath}/responseevents-stacked-MDS.dta"
+if `"$cleaned_mds"' == "" global cleaned_mds "${input_datapath}/responseevents-MDS.dta"
+if `"$raw_stacked_mds_backup"' == "" global raw_stacked_mds_backup "${input_datapath}/responseevents-MDS_backup.dta"
+if `"$mds"' == "" global mds "$project_head/extracts/mds/20220808/100pct"
+if `"$cleaned_stays"' == "" global cleaned_stays "${input_datapath}/MDS-stays.dta"
+if `"$cleaned_stays_1p"' == "" global cleaned_stays_1p "${input_datapath}/MDS-stays_1p.dta"
 
 
 // Final dta, empty initially, to be appended with observations 

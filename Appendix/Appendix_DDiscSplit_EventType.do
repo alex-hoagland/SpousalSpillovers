@@ -102,5 +102,31 @@ gen fatal = past_cutoff * group
 reghdfe insnf fatal day_c past_cutoff inter1 dow_* group if ///
 	abs(day_c) <=11.22 & treated_post == 1 [pw=wgt], ///
 	absorb(eventid ym) 
-// p-value is 
+global p_fatal_eventtype: di %5.4fc 2*ttail(e(df_r), abs(_b[fatal]/_se[fatal]))
 ********************************************************************************
+
+***** Make the table in texdoc
+texdoc init "$hoaglandoutput/D-DiscTable_byEventType.tex", replace force
+tex \begin{table}[htb]
+tex \centering
+tex \caption{\label{tab:ddisc-eventtype} Cutoff Effects by Index Event Type}
+tex \begin{threeparttable}
+tex \begin{tabular}{lccc}
+tex \toprule
+tex & Fatal within 30 days & Nonfatal to SNF/Rehab & Other nonfatal \\
+tex \midrule
+tex Cutoff effect (no FEs) & ${b_rdpost_1_fatal_30days}${p_rdpost_1_fatal_30days} & ${b_rdpost_1_nonfatal_snfrehab}${p_rdpost_1_nonfatal_snfrehab} & ${b_rdpost_1_allother}${p_rdpost_1_allother} \\
+tex & (${se_rdpost_1_fatal_30days}) & (${se_rdpost_1_nonfatal_snfrehab}) & (${se_rdpost_1_allother}) \\
+tex Cutoff effect (with FEs) & ${b_rdpost_2_fatal_30days}${p_rdpost_2_fatal_30days} & ${b_rdpost_2_nonfatal_snfrehab}${p_rdpost_2_nonfatal_snfrehab} & ${b_rdpost_2_allother}${p_rdpost_2_allother} \\
+tex & (${se_rdpost_2_fatal_30days}) & (${se_rdpost_2_nonfatal_snfrehab}) & (${se_rdpost_2_allother}) \\
+tex \midrule
+tex Fatal-versus-other interaction p-value & \multicolumn{3}{c}{${p_fatal_eventtype}} \\
+tex \bottomrule
+tex \end{tabular}
+tex \begin{tablenotes}
+tex \small
+tex \item \textit{Notes}: This table reports the post-event day-21 cutoff effect for the treated group only, split by the type of index event. The final row reports the p-value from the fixed-effects interaction regression comparing fatal shocks to all other treated-group stays.
+tex \end{tablenotes}
+tex \end{threeparttable}
+tex \end{table}
+texdoc close

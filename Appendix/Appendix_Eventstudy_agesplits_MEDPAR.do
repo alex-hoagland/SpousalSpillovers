@@ -8,11 +8,84 @@
 * Purpose: This file makes figures -- can be edited to impose restrictions
 
 *******************************************************************************/
-global input_datapath_replication "/disk/agedisk3/medicare.work/layton-DUA54204/WorkingDatasets/Replication_Package/output_dataset/ReplicationData"
-
 ********************************************************************************	
 ***** Main Regression 
-use "/disk/agedisk3/medicare.work/layton-DUA54204/WorkingDatasets/Replication_Package/output_dataset/ReplicationData_branch/chars_weekpanel.dta", clear 
+use "${input_datapath}/weekpanel.dta", clear
+
+preserve
+keep index_id response_id eventdate_index
+duplicates drop
+gen file_year = year(eventdate_index) - 1
+tempfile eventpairs
+save `eventpairs', replace
+restore
+
+preserve
+use `eventpairs', clear
+keep index_id file_year
+duplicates drop
+rename index_id bene_id
+tempfile index_ages
+save `index_ages', replace
+restore
+
+preserve
+use `index_ages', clear
+levelsof file_year, local(index_years)
+clear
+gen bene_id = ""
+gen file_year = .
+gen index_age = .
+tempfile index_age_lookup
+save `index_age_lookup', replace
+foreach y of local index_years {
+	use bene_id age if year == `y' using /disk/aging/medicare/data/harm/100pct/bsfab/`y'/bsfab`y'.dta, clear
+	rename age index_age
+	gen file_year = `y'
+	append using `index_age_lookup'
+	save `index_age_lookup', replace
+}
+use `index_age_lookup', clear
+rename bene_id index_id
+save `index_age_lookup', replace
+restore
+
+preserve
+use `eventpairs', clear
+keep response_id file_year
+duplicates drop
+rename response_id bene_id
+tempfile response_ages
+save `response_ages', replace
+restore
+
+preserve
+use `response_ages', clear
+levelsof file_year, local(response_years)
+clear
+gen bene_id = ""
+gen file_year = .
+gen response_age = .
+tempfile response_age_lookup
+save `response_age_lookup', replace
+foreach y of local response_years {
+	use bene_id age if year == `y' using /disk/aging/medicare/data/harm/100pct/bsfab/`y'/bsfab`y'.dta, clear
+	rename age response_age
+	gen file_year = `y'
+	append using `response_age_lookup'
+	save `response_age_lookup', replace
+}
+use `response_age_lookup', clear
+rename bene_id response_id
+save `response_age_lookup', replace
+restore
+
+merge m:1 index_id response_id eventdate_index using `eventpairs', keep(3) nogenerate
+rename file_year lookup_year
+merge m:1 index_id lookup_year using `index_age_lookup', keep(1 3) nogenerate update replace
+merge m:1 response_id lookup_year using `response_age_lookup', keep(1 3) nogenerate update replace
+rename lookup_year file_year
+gen age_diff = index_age - response_age if !missing(index_age) & !missing(response_age)
 
 keep if inrange(age_diff, -20, 20)
 
@@ -54,15 +127,15 @@ gcollapse (max) snf treated* split_* index_fem, by(index_id hhid eventid ym tt r
 ***** 1. Split by shock spouse age
 preserve
 
-sum snf if (split_index == 1 & treated == 1 & reltime_ < 0)
+sum snf if (split_index == 1 & treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean_1: di %3.1fc `r(mean)' * 1000
 
-sum snf if (split_index == 2 & treated == 1 & reltime_ < 0)
+sum snf if (split_index == 2 & treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean_2: di %3.1fc `r(mean)' * 1000
 
-sum snf if (treated == 1 & reltime_ < 0)
+sum snf if (treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000
 replace snf = snf / `premean' // * 100 // rescale coefficients to be % of outcome
@@ -117,15 +190,15 @@ restore
 ***** 2. Split by outcome spouse age
 preserve
 
-sum snf if (split_response == 1 & treated == 1 & reltime_ < 0)
+sum snf if (split_response == 1 & treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean_1: di %3.1fc `r(mean)' * 1000
 
-sum snf if (split_response == 2 & treated == 1 & reltime_ < 0)
+sum snf if (split_response == 2 & treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean_2: di %3.1fc `r(mean)' * 1000
 
-sum snf if (treated == 1 & reltime_ < 0)
+sum snf if (treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000
 replace snf = snf / `premean' // * 100 // rescale coefficients to be % of outcome
@@ -180,15 +253,15 @@ restore
 ***** 3. Split by age difference 
 preserve
 
-sum snf if (split_gap == 1 & treated == 1 & reltime_ < 0)
+sum snf if (split_gap == 1 & treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean_1: di %3.1fc `r(mean)' * 1000
 
-sum snf if (split_gap == 2 & treated == 1 & reltime_ < 0)
+sum snf if (split_gap == 2 & treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean_2: di %3.1fc `r(mean)' * 1000
 
-sum snf if (treated == 1 & reltime_ < 0)
+sum snf if (treated == 1 & reltime_months < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000
 replace snf = snf / `premean' // * 100 // rescale coefficients to be % of outcome
@@ -242,5 +315,3 @@ restore
 
 rm "$input_datapath/figdata_age1.dta"
 rm "$input_datapath/figdata_age2.dta"
-
-
