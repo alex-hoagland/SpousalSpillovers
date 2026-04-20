@@ -192,7 +192,7 @@ egen tot_pmt = rowtotal(*pmt)
 // inflation adjust and topcode all spending
 gen year = file_year
 
-qui do "/disk/agedisk3/medicare.work/layton-DUA54204/WorkingDatasets/Replication_Package/code/swap-indexevents/Inflation.do" "tot_pmt"
+qui do "Inflation.do" "tot_pmt"
 
 replace tot_pmt = 250000 if tot_pmt > 250000 & !missing(tot_pmt)
 drop test* ptd* phys* othc* ptb* oproc* img* hos* hop* hh* dial* em* asc* anes* 
@@ -205,7 +205,7 @@ gen fem = (sex == "2")
 gen white = (race == "1")
 gen black = (race == "2")
 gen hispanic = (race == "5")
-gen other_race = (white != 1 & black ! = 1 & hispanic != 1)
+gen other_race = (white != 1 & black != 1 & hispanic != 1)
 
 local months 01 02 03 04 05 06 07 08 09 10 11 12
 foreach i of local months {
@@ -272,13 +272,9 @@ tex \midrule
 tex \multicolumn{3}{l}{\textbf{Panel B: Healthcare Utilization}} \\
 tex Has a Chronic Condition & ${sum_any_chronic_0} & ${sum_any_chronic_1} \\ 
 tex & (${sum_any_chronic_0_se}) & (${sum_any_chronic_1_se}) \\
-tex Predicted Risk(SNF Stay) & \textcolor{red}{TK} & \textcolor{red}{TK}  \\ 
-tex & (\textcolor{red}{TK}) & (\textcolor{red}{TK}) \\
-tex SNF Stay, Any & ${sum_snf_0} & ${sum_snf_1} \\ 
-tex & (${sum_snf_0_se}) & (${sum_snf_1_se}) \\
 tex Conditional \# of SNF Stays & ${sum_snf_no_0} & ${sum_snf_no_1} \\ 
 tex & (${sum_snf_no_0_se}) & (${sum_snf_no_1_se}) \\
-tex Inpatient Admission, Any & ${sum_hosp_0} & ${sum_hosp_1} \\ 
+tex Any Inpatient Admission & ${sum_hosp_0} & ${sum_hosp_1} \\ 
 tex & (${sum_hosp_0_se}) & (${sum_hosp_1_se}) \\
 tex Conditional \# of Inpatient Admissions & ${sum_hosp_no_0} & ${sum_hosp_no_1} \\ 
 tex & (${sum_hosp_no_0_se}) & (${sum_hosp_no_1_se}) \\

@@ -42,7 +42,7 @@ foreach v of varlist fatal_30days nonfatal_snfrehab allother {
 	reghdfe insnf day_c past_cutoff inter1 dow_* if ///
 		abs(day_c) <=11.22 & treated_post == 1 [pw=wgt], noabsorb
 		
-	// store globals (TODO: incorporate these into table)
+	// store globals 
 	global b_rdpost_1_`v': di %4.3fc e(b)[1,2]
 	global se_rdpost_1_`v': di %5.4fc sqrt(e(V)[2,2])
 	if (2*ttail(e(df_r), abs(_b[past_cutoff]/_se[past_cutoff])) < 0.01) { 
@@ -62,7 +62,7 @@ foreach v of varlist fatal_30days nonfatal_snfrehab allother {
 		abs(day_c) <=11.22 & treated_post == 1 [pw=wgt], ///
 		absorb(eventid ym) 
 		
-	// store globals (TODO: incorporate these into table)
+	// store globals 
 	global b_rdpost_2_`v': di %4.3fc e(b)[1,2]
 	global se_rdpost_2_`v': di %5.4fc sqrt(e(V)[2,2])
 	if (2*ttail(e(df_r), abs(_b[past_cutoff]/_se[past_cutoff])) < 0.01) { 
@@ -79,8 +79,6 @@ foreach v of varlist fatal_30days nonfatal_snfrehab allother {
 	}
 	********************************************************************************
 }
-
-
 
 // can we get a p-value 
 use "$input_datapath/RDdata.dta" if treated == 1, clear 
@@ -102,5 +100,48 @@ gen fatal = past_cutoff * group
 reghdfe insnf fatal day_c past_cutoff inter1 dow_* group if ///
 	abs(day_c) <=11.22 & treated_post == 1 [pw=wgt], ///
 	absorb(eventid ym) 
-// p-value is 
+********************************************************************************
+
+
+***** Generate texdoc table (note that here we only generate panel B, panel A comes from other files and so this is best integrated by hand to prevent overwriting)
+texdoc init "$output/Appendix_Table_EventType.tex", replace force
+
+tex \begin{table}[htb]
+tex \centering
+tex \caption{\label{tab:ddisc-event} Effects of a Spouse’s Major Cardiovascular Event on SNF Price Sensitivity, Stratified by Event Outcome}
+tex \begin{threeparttable}
+
+tex \begin{tabular}{lcc}
+tex \toprule
+tex & (1) & (2) \\
+tex \midrule
+
+*--------------------------------------------*
+* Panel B (only panel generated in this file)
+*--------------------------------------------*
+tex \multicolumn{3}{l}{\textit{Panel B: RD, Sick Spouse Group}} \\
+
+tex Fatal Event & ${b_rdpost_1_fatal_30days}${p_rdpost_1_fatal_30days} & ${b_rdpost_2_fatal_30days}${p_rdpost_2_fatal_30days} \\
+tex & (${se_rdpost_1_fatal_30days}) & (${se_rdpost_2_fatal_30days}) \\
+
+tex Event Ending in Discharge to SNF/Rehab & ${b_rdpost_1_nonfatal_snfrehab}${p_rdpost_1_nonfatal_snfrehab} & ${b_rdpost_2_nonfatal_snfrehab}${p_rdpost_2_nonfatal_snfrehab} \\
+tex & (${se_rdpost_1_nonfatal_snfrehab}) & (${se_rdpost_2_nonfatal_snfrehab}) \\
+
+tex All Other Events & ${b_rdpost_1_allother}${p_rdpost_1_allother} & ${b_rdpost_2_allother}${p_rdpost_2_allother} \\
+tex & (${se_rdpost_1_allother}) & (${se_rdpost_2_allother}) \\
+
+tex \\
+
+tex \bottomrule
+tex \end{tabular}
+
+tex \begin{tablenotes}
+tex \small
+tex \item \textit{Notes}: This table presents regression-discontinuity estimates identifying the effect of ending Medicare coverage for SNF stays, which ends on day 21 for qualifying stays. Estimates are stratified by event type. SNF stays within 4 months of the treatment and placebo events are included in the regression. ``FE'' denotes fixed effects. * $p<0.05$, ** $p<0.01$, *** $p<0.001$.
+tex \end{tablenotes}
+
+tex \end{threeparttable}
+tex \end{table}
+
+texdoc close
 ********************************************************************************

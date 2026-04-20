@@ -12,7 +12,8 @@ global input_datapath_replication "/disk/agedisk3/medicare.work/layton-DUA54204/
 
 ********************************************************************************	
 ***** Main Regression 
-use "/disk/agedisk3/medicare.work/layton-DUA54204/WorkingDatasets/Replication_Package/output_dataset/ReplicationData_branch/chars_weekpanel.dta", clear 
+// TODO: include code generating the chars_weekpanel data set with age differences for spouses (doesn't matter here because this will be done in the MDS version of the file)
+// use "/disk/agedisk3/medicare.work/layton-DUA54204/WorkingDatasets/Replication_Package/output_dataset/ReplicationData_branch/chars_weekpanel.dta", clear 
 
 keep if inrange(age_diff, -20, 20)
 

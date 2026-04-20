@@ -14,49 +14,34 @@
 ***** Prep data
 // following Grembi et al., 2016 -- compare RD estimates for cutoff before/after treatment 
 
-// here, the outcome is whether the husband is in the SNF at day d, and the running variable is the number of paiddays accured (pd)
+// here, the outcome is whether the outcome spouse is in the SNF at day d, and the running variable is the number of paiddays accured (pd)
 // there is a sharp cutoff in paiddays at 21 and then again at 100 
 
 // restrict only to SNFs affected by the cutoff, which is those preceded by a 3-day stay discharged to SNF
 
-// we will use all husbands in the treated group prior to and following the event
+// we will use all outcome spouses in the treated group prior to and following the event
 // note that we don't need to assign 0s where no SNF stay has occurred -- RDD requires estimation only in bandwidth around cutoff so conditional differences are great!
 // make into panel for spouse outcomes with 4 months weeks before/after
-// use "${input_datapath}/responseevents-MEDPAR.dta", clear
-// gen threeday = (hospitalization == 1 & /// & dstntncd == "03"
-// 	(response_ds - response_eventdt >= 3) & ///
-// 	!missing(response_ds) & !missing(response_eventdt))
-// bys bene_id: egen tokeep = max(threeday) 
-// keep if tokeep == 1 
-// drop tokeep
-// bys bene_id (response_eventdt): gen running_count = sum(threeday) 
-// drop if running_count < 1 // require at least one 3-day hospitalization prior to SNF admission
-// gsort bene_id response_eventdt
-// bys bene_id (response_eventdt): gen span = response_eventdt[_n]-response_ds[_n-1] 
-// keep if snf == 1 & inrange(span, -30, 30) // allow for some error here
-// gen los = response_ds - response_eventdt + 1 
-// drop if missing(los) // ~17M SNF stays, down from 22M 
-
 use "${input_datapath}/responseevents-MEDPAR.dta" if snf == 1, clear
 gen los = response_ds - response_eventdt + 1 
 drop if missing(los) // ~17M SNF stays
 expand 2, generate(treated)
 merge m:1 bene_id treated using "${input_datapath}/indexevents_mergedspouses_eligible.dta", keep(3) nogenerate
 
-gen elapse = response_event - eventdate_index if !missing(response_eventdt)
+gen elapse = response_eventdt - eventdate_index if !missing(response_eventdt)
 keep if inrange(elapse, 0, 122) // inrange(elapse, -122, 122)
 gen treated_post = (inrange(elapse, 0, 122) & treated == 1) // ~33k SNF stays in this group  (13k in control and 20k in treated)
 
 // now convert this to an outcome of 1 = husband in SNF; 0 = husband not in SNF as a function of the date, with the running variable being days in paid care. Look at 4 months before and after the index event as in the histograms 
 expand los 
 gen insnf = 1
-bys response_id index_id eventid hhid response_event: gen day = _n
+bys response_id index_id eventid hhid response_eventdt: gen day = _n
 // cap this at 150 days for analysis, in keeping with histograms 
 drop if day > 150
-egen id = group(response_id index_id eventid treated* response_event) // ~33k total events
+egen id = group(response_id index_id eventid treated* response_eventdt) // ~33k total events
 fillin id day
 gsort id _fillin 
-bys id: carryforward response_id index_id eventid hhid eventdate_index response_ds treated* response_event los elapse , replace
+bys id: carryforward response_id index_id eventid hhid eventdate_index response_ds treated* response_eventdt los elapse , replace
 replace insnf = 0 if missing(insnf) // about 18% of days are in SNF here 
 gen past_cutoff = (day >= 22)
 drop _fillin id 
@@ -64,7 +49,7 @@ drop _fillin id
 // for FEs
 cap drop year* month*
 gen month = month(response_eventdt)
-replace year = year(response_eventdt)
+gen year = year(response_eventdt)
 gen ym=ym(year, month)
 gen month2 = month(eventdate_index)
 gen year2 = year(eventdate_index)
@@ -134,8 +119,8 @@ graph export "$hoaglandoutput/RD_PDFSickSpouseGroup.png", replace as(png)
 
 **** RD estimation 
 // note: can consider updating the FEs here to add power, but I don't think we need it. 
-bys index_id: ereplace index_female = max(index_female)
-egen ym_sex = group(ym index_female)
+bys index_id: ereplace index_fem = max(index_fem)
+egen ym_sex = group(ym index_fem)
 
 // first: RD estimate for control group and treatment group pre-event
 gen day_c = t - 21 // day 0 is the first day Medicare doesn't pay in full 
@@ -265,9 +250,9 @@ tex \begin{tabular}{lcc}
 tex \toprule
 tex & (1) & (2) \\
 tex \midrule
-tex \$\tau_{\text{pre}}\$ & ${b_rdpre_1}${p_rdpre_1} & ${b_rdpre_2}${p_rdpre_1} \\
+tex \$\tau_{\text{pre}}\$ & ${b_rdpre_1}${p_rdpre_1} & ${b_rdpre_2}${p_rdpre_2} \\
 tex & (${se_rdpre_1}) & (${se_rdpre_2}) \\ 
-tex \$\tau_{\text{post}}\$ & ${b_rdpost_1}${p_rdpost_1} & ${b_rdpost_2}${p_rdpost_1} \\
+tex \$\tau_{\text{post}}\$ & ${b_rdpost_1}${p_rdpost_1} & ${b_rdpost_2}${p_rdpost_2} \\
 tex & (${se_rdpost_1}) & (${se_rdpost_2}) \\ 
 tex \\ 
 tex \$\beta_{\text{D-Disc}}\$ & ${b_dd_1}${p_dd_1} & ${b_dd_2}${p_dd_2} \\ 

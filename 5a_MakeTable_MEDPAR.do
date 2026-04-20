@@ -12,8 +12,8 @@
 
 	
 ***** Make table using texdoc 
-use "$hoaglandoutput/5_HealthEffectsTable.dta", clear 
-gen p = 1-normal(abs(coef/stderr)) // gen p-values 
+use "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta", clear 
+cap gen p = 2*(1-normal(abs(coef/stderr))) // gen p-values if not already done
 gen star = "***" if p < .001
 replace star = "**" if missing(star) & p < .01
 replace star = "*" if missing(star) & p < .05

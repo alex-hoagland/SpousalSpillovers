@@ -64,7 +64,7 @@ regsave using "$input_datapath/figdata_females.dta", replace ci p
 // test p-value of difference across index_fem 
 reghdfe `1' ib3.tt##i.treated##index_fem, ///
 	absorb(eventid ym) cluster(hhid)
-test 4bn.tt#1bn.treated#1bn.index_female 5bn.tt#1bn.treated#1bn.index_female 6bn.tt#1bn.treated#1bn.index_female 7bn.tt#1bn.treated#1bn.index_female 8bn.tt#1bn.treated#1bn.index_female 9bn.tt#1bn.treated#1bn.index_female 10bn.tt#1bn.treated#1bn.index_female 11bn.tt#1bn.treated#1bn.index_female 12bn.tt#1bn.treated#1bn.index_female 13bn.tt#1bn.treated#1bn.index_female 14bn.tt#1bn.treated#1bn.index_female 15bn.tt#1bn.treated#1bn.index_female 16bn.tt#1bn.treated#1bn.index_female
+test 4bn.tt#1bn.treated#1bn.index_fem 5bn.tt#1bn.treated#1bn.index_fem 6bn.tt#1bn.treated#1bn.index_fem 7bn.tt#1bn.treated#1bn.index_fem 8bn.tt#1bn.treated#1bn.index_fem 9bn.tt#1bn.treated#1bn.index_fem 10bn.tt#1bn.treated#1bn.index_fem 11bn.tt#1bn.treated#1bn.index_fem 12bn.tt#1bn.treated#1bn.index_fem 13bn.tt#1bn.treated#1bn.index_fem 14bn.tt#1bn.treated#1bn.index_fem 15bn.tt#1bn.treated#1bn.index_fem 16bn.tt#1bn.treated#1bn.index_fem
 	// gives the joing p-value for differences (p=0.2423 for SNF and p=0.0446 for hosp)
 ******************************************************************************************
 

@@ -11,26 +11,7 @@ the analysis dataset
 * NOTES: 
 	
 *******************************************************************************/
-macro drop _all 
 
-version 15 // so that .gph files save in a way my old machine can read
-// set maxvar 100000
-// ssc install ereplace
-
-global project_head "/homes/nber/kwtjima-dua58151/layton-DUA58151"
-global head "$project_head/kwtjima-dua58151"
-global allcode"$head/code/jimmy"
-global input_datapath "$head/data/derived"
-global input_rawdatapath "$head/data/raw"
-global input_datapath_branch "$head/data/derived"
-global kwtjimaoutput "$head/output"
-// global olddata "/disk/agedisk3/medicare.work/layton-DUA54204/WorkingDatasets/kcp-work/spousal_spillover/derived_local/female_index_events" // for replication purposes only
-
-global today: di %td_CYND date("$S_DATE", "DMY")
-global today $today // second command removes leading spaces 
-
-// set scheme cblind1
-set seed 081323
 
 ********************************************************************************
 *** Globals ********************************************************************

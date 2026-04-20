@@ -11,7 +11,7 @@
 *******************************************************************************/
 
 
-/***** First, pull in all SNF stays and the key variables 
+***** First, pull in all SNF stays and the key variables 
 clear
 gen response_id = ""
 save "$input_datapath/affected_SNFstays.dta", replace 
@@ -44,14 +44,14 @@ forvalues year = 2010/2016 {
 
 use "$input_datapath/affected_SNFstays.dta", clear
 cap drop year 
-gen year = year(response_event)
-gen month = month(response_event)
+gen year = year(response_eventdt)
+gen month = month(response_eventdt)
 gen ym = ym(year, month)
 keep response_id ym los cvrlvldt
 gcollapse (sum) los (max) cvrlvldt, by(response_id ym) fast // aggregate at person-month level 
 compress
 save "$input_datapath/affected_SNFstays.dta", replace
-********************************************************************************/
+********************************************************************************
 
 
 ***** Regression 1: Average LOS by month of admission *****

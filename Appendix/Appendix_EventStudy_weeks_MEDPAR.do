@@ -37,13 +37,13 @@ drop if todrop == 1
 drop test todrop
 
 // want to keep 5 months pre and 12 months post 
-gen tt = reltime_w + 4*4 // note that now the base value is -1 + 16 = 15 
-keep if inrange(reltime_w, -5*4, 12*4)
-replace tt = 15 if reltime_w < -16 // additional reference points for regression 
+gen tt = reltime_weeks + 4*4 // note that now the base value is -1 + 16 = 15 
+keep if inrange(reltime_weeks, -5*4, 12*4)
+replace tt = 15 if reltime_weeks < -16 // additional reference points for regression 
 
 local 1 "snf" // only want to run this for SNFs anyway
 
-gcollapse (max) `1' treated* index_fem, by(index_id hhid eventid ym tt reltime_w ) fast
+gcollapse (max) `1' treated* index_fem, by(index_id hhid eventid ym tt reltime_weeks ) fast
 sum `1' if (treated == 1 & reltime_ < 0)
 local premean: di %7.6fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000

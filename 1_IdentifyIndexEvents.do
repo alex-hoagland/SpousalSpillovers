@@ -109,7 +109,7 @@ forvalues year = 2008/2017 {
 	drop if missing(eventdate_index) 
 	keep if inrange(admsndt, eventdate_index, eventdate_index + 90) 
 	drop i j
-	gen elapse = admsndt - eventdate_ind	
+	gen elapse = admsndt - eventdate_index	
 	bys bene_id eventdate_index: egen test = min(elapse) 
 	keep if test == elapse
 	drop test elapse
