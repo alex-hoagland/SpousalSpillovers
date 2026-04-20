@@ -108,42 +108,6 @@ gen type = 0 // all
 append using "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta"
 save "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta", replace
 restore
-
-// run regression: fatal
-reghdfe `1' ib3.tt##i.treated if fatal_disc == 1, ///
-	absorb(eventid ym) cluster(hhid)
-
-// save data 	
-preserve		
-regsave , ci p
-keep if strpos(var, ".tt#1.treated")
-gen reltime = substr(var, 1, 2)
-destring reltime, replace
-replace reltime = reltime - 4
-keep if reltime == 0 
-gen model = "`1'"
-gen type = 1 // fatal 
-append using "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta"
-save "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta", replace
-restore
-
-// run regression: nonfatal
-reghdfe `1' ib3.tt##i.treated if fatal_disc == 0, ///
-	absorb(eventid ym) cluster(hhid)
-
-// save data 	
-preserve		
-regsave , ci p
-keep if strpos(var, ".tt#1.treated")
-gen reltime = substr(var, 1, 2)
-destring reltime, replace
-replace reltime = reltime - 4
-keep if reltime == 0 
-gen model = "`1'"
-gen type = 2 // nonfatal 
-append using "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta"
-save "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta", replace
-restore
 ********************************************************************************
 
 // remove ED data if needed

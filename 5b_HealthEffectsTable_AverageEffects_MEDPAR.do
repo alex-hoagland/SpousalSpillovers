@@ -97,7 +97,7 @@ reghdfe `1' i.post##i.treated, ///
 	absorb(eventid ym) cluster(hhid)
 
 // save data 			
-regsave , ci
+regsave , ci p
 keep if strpos(var, ".post#1.treated")
 gen model = "`1'"
 gen type = 4 // average effects -- no fatal or nonfatal here 
