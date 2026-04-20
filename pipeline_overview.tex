@@ -1,0 +1,82 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in,landscape]{geometry}
+\usepackage{booktabs}
+\usepackage[colorlinks=true]{hyperref}
+
+\setlength{\parindent}{0pt}
+\setlength{\columnsep}{0.08in}
+
+\begin{document}
+
+\noindent This project turns raw Medicare claims and enrollment files into spouse-level event-time panels around one spouse's first heart attack or stroke, then reuses those constructed files for the main event studies, heterogeneity analyses, appendix robustness checks, annual spending tables, and a separate day-21 SNF cost-sharing RD. Format below is script | purpose | key inputs | key outputs | main links; abbreviations are IE=\nolinkurl{indexevents.dta}, IB=\nolinkurl{indexevents_base.dta}, IMS=\nolinkurl{indexevents_mergedspouses_eligible.dta}, WP=\nolinkurl{weekpanel.dta}, REM=\nolinkurl{responseevents-MEDPAR.dta}, REMDS=\nolinkurl{responseevents-MDS.dta}, Mort=\nolinkurl{mortality.dta}, and RD=\nolinkurl{RDdata.dta}.
+
+\medskip
+\twocolumn
+\raggedright
+{\fontsize{5.0}{5.15}\selectfont
+\textbf{Driver and core construction}\\
+\nolinkurl{ValueHealthySpouse_Master.do} | master runner | configured globals | paper tables/figures | calls 1--11 + appendix\\
+\nolinkurl{Inflation.do} | in-memory deflator | spending var, year | adjusted values | used by 3a, 10\\
+\nolinkurl{1_IdentifyIndexEvents.do} | first index MI/stroke stays + discharge traits | raw MEDPAR, BSF deaths | IE | feeds 3 and panel rebuilds\\
+\nolinkurl{2_ResponseEvents_MEDPAR.do} | spouse hospital/SNF response events | raw MEDPAR | REM | feeds 3, 4a, 11, appendix rebuilds\\
+\nolinkurl{2_ResponseEvents_MDS.do} | stay-level SNF spells from MDS V2/V3 | raw MDS | REMDS, \nolinkurl{MDS-stays.dta}, 1\% backups | feeds MDS branch\\
+\nolinkurl{2a_ResponseEvents_ED.do} | monthly ED counts | 20\% IP/OP claims | \nolinkurl{EDdx.dta} | optional merge in 4 and 5\\
+\nolinkurl{2b_ResponseEvents_mortality.do} | bene death-date lookup | BSF deaths | Mort | balanced-sample filters, 8\\
+\nolinkurl{2c_ResponseEvents_Falls.do} | monthly fall indicators | inpatient diagnoses | \nolinkurl{responseevents-falls.dta} | optional merge in 4 and 5\\
+\nolinkurl{3_ConstructPanel.do} | spouse matching + weekly eligible panel | IE, REM, spouse links, BSF eligibility | IB, IMS, WP | common upstream object\\
+\nolinkurl{3a_SummaryStatsTable.do} | Table 1 covariates in sample | WP, BSF, BSFCC, BSFCU | \nolinkurl{sumstats-new.tex} | descriptive table\\
+
+\smallskip
+\textbf{Main event studies and tables}\\
+\nolinkurl{4_MainEventStudy_MEDPAR.do} | main monthly spouse SNF-use ES | WP + optional Mort/falls/ED/LASSO merges | main graphs | Figure 1 branch\\
+\nolinkurl{4_MainEventStudy_MDS.do} | MDS occupancy/entry ES | external \nolinkurl{main_eventstudy.dta}, \nolinkurl{MDS-stays.dta} | MDS graphs | MDS analogue of 4\\
+\nolinkurl{4a_MainEventStudy_snf-entry.do} | recode SNF use to entry/exit | WP, REM | entry/exit regdata, graphs | appendix companion to 4\\
+\nolinkurl{5_HealthEffectsTable_MEDPAR.do} | month-0 pooled/fatal/nonfatal health effects | WP + optional Mort/falls/ED | health-effects staging dta | feeds 5a\\
+\nolinkurl{5b_HealthEffectsTable_AverageEffects_MEDPAR.do} | average post-period health effects | same inputs as 5 | appended staging rows | companion to 5a\\
+\nolinkurl{5a_MakeTable_MEDPAR.do} | format Table 2 | health-effects staging dta | \nolinkurl{health_effects_pooled.tex} | final table writer\\
+\nolinkurl{6_MainEventStudy_FatalitySplit_MEDPAR.do} | split ES by fatal vs nonfatal shocks | WP, Mort | subgroup graphs | Figure 3\\
+\nolinkurl{6_MainEventStudy_FatalitySplit_MDS.do} | MDS analogue of 6 | weekly panel as written | MDS subgroup graphs | MDS Figure 3 branch\\
+\nolinkurl{7a_SplitEffects_ChronicCondition_MEDPAR.do} | split by spouse chronic burden | WP, BSFCC, optional Mort | subgroup figures | Figure 4\\
+\nolinkurl{7a_SplitEffects_ChronicCondition_MDS.do} | MDS analogue of 7a | weekly panel, BSFCC | MDS subgroup figures | MDS heterogeneity\\
+\nolinkurl{7b_SplitEffects_IndexDischarge_MEDPAR.do} | split by index home vs facility discharge | WP, optional Mort | subgroup figures | Figure 5\\
+\nolinkurl{7b_SplitEffects_IndexDischarge_MDS.do} | MDS analogue of 7b | weekly panel | MDS subgroup figures | MDS heterogeneity\\
+\nolinkurl{8_MortalityEffects.do} | response-spouse mortality ES by index fatality | WP, Mort | mortality graphs | Figure 6\\
+
+\smallskip
+\textbf{Prediction, spending, and cost sharing}\\
+\nolinkurl{9_LASSO_predict_snf.do} | predicted discharge-to-SNF model | raw MEDPAR, BSF enrollment | LASSO training/prediction files, histogram | feeds 9\_merge, 9\_LASSO\\
+\nolinkurl{9_merge_LASSOdata.do} | align predicted SNF probabilities to event time | WP, \nolinkurl{lasso_prob_snf_3folds.dta} | \nolinkurl{tomerge_probsnf.dta} | feeds 9\_LASSO and optional 4\\
+\nolinkurl{9_LASSOTable.do} | compare actual vs predicted spillovers | WP, Mort, \nolinkurl{tomerge_probsnf.dta} | decomposition regdata, graphs | predicted-SNF results\\
+\nolinkurl{10_AnnualSpending.do} | annualize exposure and spending | WP, BSFCU spending, \nolinkurl{Inflation.do} | \nolinkurl{yearpanel.dta}, Table 4 tex | spending results\\
+\nolinkurl{11_CostSharingRD.do} | day-21 SNF RD sample + estimates | REM, IMS | RD, RD plots, \nolinkurl{D-DiscTable.tex} | Figure 7, Table 5\\
+\nolinkurl{11a_CostSharingRD_ChronicCondition.do} | split RD by spouse chronic burden | RD, BSFCC | \nolinkurl{D-DiscTable_byChronicCondition.tex} | appendix RD heterogeneity\\
+\nolinkurl{11b_CostSharingRD_EventStudy.do} | attach LOS/coverage expiration to ES | WP, Mort, \nolinkurl{affected_SNFstays.dta} | LOS/coverage graphs | bridge from RD to ES\\
+
+\smallskip
+\textbf{Appendix event-study variants}\\
+\nolinkurl{Appendix/Appendix_Validate_Specification_MEDPAR.do} | extra baseline periods + individual FE sensitivity | WP, Mort | \nolinkurl{validatemodel_*.dta}, comparison graph | robustness branch of 4\\
+\nolinkurl{Appendix/Appendix_Circularity.do} | placebo heart/stroke ES | WP, Mort | circularity figure | falsification around 4\\
+\nolinkurl{Appendix/Appendix_ExtraHouseholdEvents_EventStudy_MEDPAR.do} | allow multiple household events | \nolinkurl{indexevents_mergedspouses.dta}, REM, Mort | \nolinkurl{weekpanel_me.dta}, figure | alternative panel builder\\
+\nolinkurl{Appendix/Appendix_Robustness_No2YearRequirement_MEDPAR.do} | drop 2-year no-prior-event rule | IE, REM, Mort | \nolinkurl{weekpanel_no2y.dta}, figure | alternative panel builder\\
+\nolinkurl{Appendix/Appendix_MainEventStudy_gendersplit_MEDPAR.do} | split ES by couple gender direction | WP, Mort | gender-split figure | heterogeneity version of 4\\
+\nolinkurl{Appendix/Appendix_EventStudy_weeks_MEDPAR.do} | weekly-frequency ES | WP, Mort | weekly dynamic figure | timing check for 4\\
+\nolinkurl{Appendix/Appendix_Eventstudy_agesplits_MEDPAR.do} | split by index age, response age, age gap | \nolinkurl{chars_weekpanel.dta}, Mort | age-split figures | heterogeneity branch\\
+\nolinkurl{Appendix/Appendix_LongrunResults_MEDPAR.do} | four-year gap + quarterly horizons | IB, REM, Mort | \nolinkurl{ax_*} panels, long-run figure | longer-horizon rebuild\\
+\nolinkurl{Appendix/Appendix_LocationPreferences_MEDPAR.do} | same-SNF/different-SNF/no-SNF margins | WP, Mort | location-preference figure | decomposition of 4\\
+\nolinkurl{Appendix/Appendix_SplitEffects_Race_MEDPAR.do} | split by response race | WP, Mort, BSF race | race figure | heterogeneity branch\\
+\nolinkurl{Appendix/Appendix_SplitEffects_IndexLOS_MEDPAR.do} | split by index-stay LOS | WP, Mort | LOS figure | heterogeneity branch\\
+\nolinkurl{Appendix/Appendix_SplitEffects_IndexLOS_MDS.do} | MDS analogue of LOS split | weekly panel as written | MDS LOS figure | MDS heterogeneity\\
+\nolinkurl{Appendix/Appendix_SplitEffect_TimeofDeath_MEDPAR.do} | refine fatal-shock timing by death month/quarter | WP, Mort | time-of-death figures | refinement of 6 and 8\\
+
+\smallskip
+\textbf{Appendix RD tables}\\
+\nolinkurl{Appendix/Appendix_DDiscSplit_EventType.do} | RD heterogeneity by event type | RD | subgroup globals, p-value sketch | intended appendix companion to 11\\
+\nolinkurl{Appendix/Appendix_DDiscSplit_Gender.do} | RD heterogeneity by focal-spouse gender | RD | \nolinkurl{D-DiscTable_byGender.tex} | appendix companion to 11\\
+\nolinkurl{Appendix/Appendix_DDiscSplit_ADRD.do} | RD heterogeneity by response-spouse ADRD | \nolinkurl{ADRDdx.dta}, RD | \nolinkurl{D-DiscTable_byADRD.tex} | appendix companion to 11\\
+\nolinkurl{Appendix/Appendix_DDiscSplit_QuarterofYear.do} | RD heterogeneity by months since shock | \nolinkurl{RDdata_fullyear.dta} | \nolinkurl{D-DiscTable_fullyear.tex} | appendix companion to 11\\
+
+\smallskip
+Scripts 1--3 create the reusable event-date, response-event, and spouse-week analysis files that everything else builds on. The main paper then branches from WP into baseline event studies, health and spending tables, and a prediction extension, while Script 11 creates the separate RD sample that feeds the cost-sharing tables and appendix splits. Appendix scripts mostly rerun the same design under alternative sample rules, horizons, or subgroup definitions rather than constructing new raw-data pipelines.
+}
+
+\end{document}

@@ -101,8 +101,8 @@ regsave , ci p
 keep if strpos(var, ".post#1.treated")
 gen model = "`1'"
 gen type = 4 // average effects -- no fatal or nonfatal here 
-append using "$hoaglandoutput/5_HealthEffectsTable.dta"
-save "$hoaglandoutput/5_HealthEffectsTable.dta", replace
+append using "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta"
+save "$hoaglandoutput/5_HealthEffectsTable_MEDPAR.dta", replace
 ********************************************************************************
 
 // remove ED data if needed

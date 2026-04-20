@@ -110,4 +110,3 @@ graph export "${hoaglandoutput}/EventStudy-bygender_`1'_$today.pdf", as(pdf) rep
 // clean up data
 rm "$input_datapath/figdata_males.dta"
 rm "$input_datapath/figdata_females.dta"
-
