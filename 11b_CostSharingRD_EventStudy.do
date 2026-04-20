@@ -11,7 +11,7 @@
 *******************************************************************************/
 
 
-/***** First, pull in all SNF stays and the key variables 
+***** First, pull in all SNF stays and the key variables 
 clear
 gen response_id = ""
 save "$input_datapath/affected_SNFstays.dta", replace 

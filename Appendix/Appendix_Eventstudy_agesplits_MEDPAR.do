@@ -4,12 +4,14 @@
 * Created by: Prabidhik KC
 * Created on: 2/8/24
 * Last modified on: 05/20
-* Last modified by: 
+* Last modified by:
 * Purpose: This file makes figures -- can be edited to impose restrictions
 
 *******************************************************************************/
-********************************************************************************	
-***** Main Regression 
+********************************************************************************
+***** Main Regression
+// TODO: include code generating the chars_weekpanel data set with age differences for spouses (doesn't matter here because this will be done in the MDS version of the file)
+// use "/disk/agedisk3/medicare.work/layton-DUA54204/WorkingDatasets/Replication_Package/output_dataset/ReplicationData_branch/chars_weekpanel.dta", clear
 use "${input_datapath}/weekpanel.dta", clear
 
 preserve
@@ -91,31 +93,31 @@ keep if inrange(age_diff, -20, 20)
 
 // keep only households where outcome spouse lives for at least a year post-event
 cap drop bene_id
-gen bene_id = response_id 
+gen bene_id = response_id
 merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
-	
-// aggregate to monthly level 
+
+// aggregate to monthly level
 gen reltime_months = floor(reltime_weeks/4)
 gen workingdate = eventdate_index + 30*reltime_months
 gen wknum = month(workingdate)
-cap drop year 
+cap drop year
 gen year = year(workingdate)
-replace year = year - 1 if treated == 0 
+replace year = year - 1 if treated == 0
 gen ym = ym(year, wknum)
 gen treated_post = (treated == 1 & reltime_weeks >= 0)
 
 // keep only households where outcome spouse lives for at least a year post-event
 gen test = death_dt - eventdate_index
 gen todrop = (!missing(death_dt) & test <= 365)
-bys index_id response_id: ereplace todrop = max(todrop) 
+bys index_id response_id: ereplace todrop = max(todrop)
 drop if todrop == 1
 drop test todrop
 
 gen tt = reltime_months + 4 // makes regression code easier to have no negative values here -- note that 3 is now the base period (-1 + 4 = 3)
-keep if inrange(reltime_months, -5, 12) 
+keep if inrange(reltime_months, -5, 12)
 replace tt = 3 if reltime_months <= -5 // additional reference point for regression
 
-// splits for each group 
+// splits for each group
 xtile split_index = index_age, nq(2)
 xtile split_response = response_age, nq(2)
 xtile split_gap = age_diff, nq(2)
@@ -149,8 +151,8 @@ reghdfe snf ib3.tt##i.treated if split_index == 2, ///
 	absorb(eventid ym) cluster(hhid)
 regsave using "$input_datapath/figdata_age2.dta", replace ci p
 
-use "$input_datapath/figdata_age1.dta", clear 
-gen model = 1 
+use "$input_datapath/figdata_age1.dta", clear
+gen model = 1
 append using "$input_datapath/figdata_age2.dta"
 replace model = 2 if missing(model)
 
@@ -160,9 +162,9 @@ destring reltime, replace
 replace reltime = reltime - 4
 local newobs = _N + 2
 set obs `newobs'
-replace reltime = -1 if missing(reltime) 
+replace reltime = -1 if missing(reltime)
 foreach v of varlist coef ci_* {
-	replace `v' = 0 if missing(`v') 
+	replace `v' = 0 if missing(`v')
 }
 
 gsort model reltime
@@ -180,7 +182,7 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	legend(order(2 "Index Spouse Age Below Median (Baseline mean = `textmean_1' per 1000)" 3 "Index Spouse Age Above Median (Baseline mean = `textmean_2' per 1000)") ///
 		position(11) ring(0) rows(2)) ///
 	xtitle("Months Around Shock Spouse's First Heart Attack or Stroke") ///
-	xsc(r(-4(1)12)) xlab(-4(1)12) 
+	xsc(r(-4(1)12)) xlab(-4(1)12)
 graph save "${hoaglandoutput}/Stratify_IndexSpouseAgeDifference_${today}_balanced.gph", replace
 graph export "${hoaglandoutput}/Stratify_IndexSpouseAgeDifference_${today}_balanced.png", as(png) replace
 graph export "${hoaglandoutput}/Stratify_IndexSpouseAgeDifference_${today}_balanced.pdf", as(pdf) replace
@@ -212,8 +214,8 @@ reghdfe snf ib3.tt##i.treated if split_response == 2, ///
 	absorb(eventid ym) cluster(hhid)
 regsave using "$input_datapath/figdata_age2.dta", replace ci p
 
-use "$input_datapath/figdata_age1.dta", clear 
-gen model = 1 
+use "$input_datapath/figdata_age1.dta", clear
+gen model = 1
 append using "$input_datapath/figdata_age2.dta"
 replace model = 2 if missing(model)
 
@@ -223,9 +225,9 @@ destring reltime, replace
 replace reltime = reltime - 4
 local newobs = _N + 2
 set obs `newobs'
-replace reltime = -1 if missing(reltime) 
+replace reltime = -1 if missing(reltime)
 foreach v of varlist coef ci_* {
-	replace `v' = 0 if missing(`v') 
+	replace `v' = 0 if missing(`v')
 }
 
 gsort model reltime
@@ -243,14 +245,14 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	legend(order(2 "Outcome Spouse Age Below Median (Baseline mean = `textmean_1' per 1000)" 3 "Outcome Spouse Age Above Median (Baseline mean = `textmean_2' per 1000)") ///
 		position(11) ring(0) rows(2)) ///
 	xtitle("Months Around Shock Spouse's First Heart Attack or Stroke") ///
-	xsc(r(-4(1)12)) xlab(-4(1)12) 
+	xsc(r(-4(1)12)) xlab(-4(1)12)
 graph save "${hoaglandoutput}/Stratify_OutcomeSpouseAgeDifference_${today}_balanced.gph", replace
 graph export "${hoaglandoutput}/Stratify_OutcomeSpouseAgeDifference_${today}_balanced.png", as(png) replace
 graph export "${hoaglandoutput}/Stratify_OutcomeSpouseAgeDifference_${today}_balanced.pdf", as(pdf) replace
 restore
 ********************************************************************************
 
-***** 3. Split by age difference 
+***** 3. Split by age difference
 preserve
 
 sum snf if (split_gap == 1 & treated == 1 & reltime_months < 0)
@@ -275,8 +277,8 @@ reghdfe snf ib3.tt##i.treated if split_gap == 2, ///
 	absorb(eventid ym) cluster(hhid)
 regsave using "$input_datapath/figdata_age2.dta", replace ci p
 
-use "$input_datapath/figdata_age1.dta", clear 
-gen model = 1 
+use "$input_datapath/figdata_age1.dta", clear
+gen model = 1
 append using "$input_datapath/figdata_age2.dta"
 replace model = 2 if missing(model)
 
@@ -286,9 +288,9 @@ destring reltime, replace
 replace reltime = reltime - 4
 local newobs = _N + 2
 set obs `newobs'
-replace reltime = -1 if missing(reltime) 
+replace reltime = -1 if missing(reltime)
 foreach v of varlist coef ci_* {
-	replace `v' = 0 if missing(`v') 
+	replace `v' = 0 if missing(`v')
 }
 
 gsort model reltime
@@ -306,7 +308,7 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	legend(order(2 "Spousal Age Gap Below Median (Baseline mean = `textmean_1' per 1000)" 3 "Spousal Age Gap Above Median (Baseline mean = `textmean_2' per 1000)") ///
 		position(11) ring(0) rows(2)) ///
 	xtitle("Months Around Shock Spouse's First Heart Attack or Stroke") ///
-	xsc(r(-4(1)12)) xlab(-4(1)12) 
+	xsc(r(-4(1)12)) xlab(-4(1)12)
 graph save "${hoaglandoutput}/Stratify_AgeDifference_${today}_balanced.gph", replace
 graph export "${hoaglandoutput}/Stratify_AgeDifference_${today}_balanced.png", as(png) replace
 graph export "${hoaglandoutput}/Stratify_AgeDifference_${today}_balanced.pdf", as(pdf) replace
