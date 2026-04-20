@@ -11,7 +11,119 @@
 
 *******************************************************************************/
 
-use bene_id test using "${input_datapath}/ADRDdx.dta", clear
+
+***** Identify ADRD diagnoses
+clear 
+gen year = .
+save "${input_datapath}/ADRDdx.dta", replace
+
+// loop through years: start with inpatient claims 
+forvalues year = 2010/2017 {
+	
+	display "***** WORKING ON YEAR `year' *****"
+	
+	use fac_type bene_id from_dt icd_dgns_cd* using /disk/aging/medicare/data/harm/20pct/ip/`year'/ipc`year' if /// Inpatient claims data, using Bynum-standard algorithm for ADRD (see https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9159666/#sup1)
+	inlist(icd_dgns_cd1, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd1, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd1, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd1, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd1, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd1, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd1, "R4181") | ///
+		inlist(icd_dgns_cd2, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd2, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd2, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd2, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd2, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd2, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd2, "R4181") | ///
+		inlist(icd_dgns_cd3, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd3, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd3, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd3, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd3, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd3, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd3, "R4181") | ///
+		inlist(icd_dgns_cd4, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd4, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd4, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd4, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd4, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd4, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd4, "R4181") | ///
+		inlist(icd_dgns_cd5, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd5, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd5, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd5, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd5, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd5, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd5, "R4181"), clear
+	gen test = 1 
+	gen snfdx = (fac_type == "2" | fac_type == "3" )
+	gcollapse (max) test snfdx, by(bene_id from_dt) fast
+	drop test
+
+	append using "${input_datapath}/ADRDdx.dta"
+	save "${input_datapath}/ADRDdx.dta", replace	
+} 
+
+	// do the same with the outpatient files
+forvalues year = 2010/2017 {
+	display "***** WORKING ON OUTPATIENT YEAR `year' *****"
+	use fac_type bene_id thru_dt icd_dgns_cd* using /disk/aging/medicare/data/harm/20pct/op/`year'/opc`year' if  ///
+		inlist(icd_dgns_cd1, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd1, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd1, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd1, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd1, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd1, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd1, "R4181") | ///
+		inlist(icd_dgns_cd2, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd2, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd2, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd2, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd2, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd2, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd2, "R4181") | ///
+		inlist(icd_dgns_cd3, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd3, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd3, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd3, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd3, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd3, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd3, "R4181") | ///
+		inlist(icd_dgns_cd4, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd4, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd4, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd4, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd4, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd4, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd4, "R4181") | ///
+		inlist(icd_dgns_cd5, "3310", "33111", "33119", "3312", "3317", "33182", "33189") | /// 
+		inlist(icd_dgns_cd5, "2900", "29010", "29011", "29012", "29013", "29020", "29021") | ///
+		inlist(icd_dgns_cd5, "2903", "29040", "29041", "29042", "29043", "2908", "2940") | ///
+		inlist(icd_dgns_cd5, "29410", "29411", "29420", "29421", "797", "F0150", "F0151") | ///
+		inlist(icd_dgns_cd5, "F0280", "F0281", "F0390", "F0391", "F04", "G300", "G301") | ///
+		inlist(icd_dgns_cd5, "G308", "G309", "G3101", "G3109", "G3183", "G311", "G312") | ///
+		inlist(icd_dgns_cd5, "R4181") , clear
+	gen snfdx = (fac_type == "2" | fac_type == "3" )
+	gen test = 1 		
+	rename thru_dt from_dt
+	gcollapse (max) test snfdx, by(bene_id from_dt) fast
+	append using "${input_datapath}/ADRDdx.dta"
+	replace test = 1 
+	gcollapse (max) test snfdx, by(bene_id from_dt) fast
+	save "${input_datapath}/ADRDdx.dta", replace
+}
+
+compress
+save "${input_datapath}/ADRDdx.dta", replace
+********************************************************************************
+
+
+***** Merge this into the RD data 
+keep bene_id test
+// use bene_id test using "${input_datapath}/ADRDdx.dta", clear
 gcollapse (max) hasadrd=test, by(bene_id) fast // 1m individuals
 rename bene_id response_id 
 

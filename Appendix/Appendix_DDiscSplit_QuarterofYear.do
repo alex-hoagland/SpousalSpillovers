@@ -10,8 +10,57 @@
 
 *******************************************************************************/
 
-***** DDisc regressions
-use "$input_datapath/RDdata_fullyear.dta", clear  
+***** DDisc regressions -- requires new data that looks over the full year as a robustness check 
+
+// following Grembi et al., 2016 -- compare RD estimates for cutoff before/after treatment 
+
+// here, the outcome is whether the outcome spouse is in the SNF at day d, and the running variable is the number of paiddays accured (pd)
+// there is a sharp cutoff in paiddays at 21 and then again at 100 
+
+// restrict only to SNFs affected by the cutoff, which is those preceded by a 3-day stay discharged to SNF
+
+// we will use all outcome spouses in the treated group prior to and following the event
+// note that we don't need to assign 0s where no SNF stay has occurred -- RDD requires estimation only in bandwidth around cutoff so conditional differences are great!
+// make into panel for spouse outcomes with 4 months weeks before/after
+use "${input_datapath}/responseevents-MEDPAR.dta" if snf == 1, clear
+gen los = response_ds - response_eventdt + 1 
+drop if missing(los) // ~17M SNF stays
+expand 2, generate(treated)
+merge m:1 bene_id treated using "${input_datapath}/indexevents_mergedspouses_eligible.dta", keep(3) nogenerate
+
+gen elapse = response_eventdt - eventdate_index if !missing(response_eventdt)
+keep if inrange(elapse, 0, 365) // 
+gen treated_post = (inrange(elapse, 0, 365) & treated == 1) // 
+
+// now convert this to an outcome of 1 = husband in SNF; 0 = husband not in SNF as a function of the date, with the running variable being days in paid care. Look at 4 months before and after the index event as in the histograms 
+expand los 
+gen insnf = 1
+bys response_id index_id eventid hhid response_eventdt: gen day = _n
+// cap this at 150 days for analysis, in keeping with histograms 
+drop if day > 150
+egen id = group(response_id index_id eventid treated* response_eventdt) // ~33k total events
+fillin id day
+gsort id _fillin 
+bys id: carryforward response_id index_id eventid hhid eventdate_index response_ds treated* response_eventdt los elapse , replace
+replace insnf = 0 if missing(insnf) // about 18% of days are in SNF here 
+gen past_cutoff = (day >= 22)
+drop _fillin id 
+
+// for FEs
+cap drop year* month*
+gen month = month(response_eventdt)
+gen year = year(response_eventdt)
+gen ym=ym(year, month)
+gen month2 = month(eventdate_index)
+gen year2 = year(eventdate_index)
+gen ym2=ym(year2, month2)
+
+// day of the week dummies 
+gen dow = dow(eventdate_index + day)
+forvalues d = 0/6 { 
+	gen dow_`d' = (dow == `d')
+}
+
 drop if inrange(elapse, -400, -1e-2) // don't need these, just the post-event data for the treated =0 group
 drop if treated == 0 & elapse >= 122 
 
