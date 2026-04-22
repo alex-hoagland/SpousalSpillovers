@@ -19,11 +19,6 @@ bys index_id : ereplace reldeath = min(reldeath)
 keep if inrange(reldeath, 0, 364)
 replace reldeath = floor(reldeath/30) // most is in time 0 
 drop if reldeath == 12
-
-// keep only households where outcome spouse lives for at least a year post-event
-cap drop bene_id
-gen bene_id = response_id 
-merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
 	
 // aggregate to monthly level 
 gen reltime_months = floor(reltime_weeks/4)
@@ -40,40 +35,38 @@ keep if inrange(reltime_months, -5, 12)
 replace tt = 3 if reltime_months <= -5 // additional reference points
 
 // keep only households where outcome spouse lives for at least a year post-event
-gen test = death_dt - eventdate_index
-gen todrop = (!missing(death_dt) & test <= 365)
-bys index_id response_id: ereplace todrop = max(todrop) 
-drop if todrop == 1
-drop test todrop
+if ("`2'" == "balanced" ) { 
+	drop if nosurvive == 1
+}
 
-gcollapse (max) snf treated* reldeath, by(index_id hhid eventid ym tt reltime_months ) fast
+gcollapse (max) `1' treated* reldeath, by(index_id hhid eventid ym tt reltime_months ) fast
 
 // gen test = runiform() 
 // bys index_id: ereplace test = mean(test) 
 // keep if (test < .5 & treated == 0) | (test >= .5 & treated == 1) 
 
-// sum snf if treated == 1 & reltime < 0
-// replace snf = snf / `r(mean)'
+// sum `1' if treated == 1 & reltime < 0
+// replace `1' = `1' / `r(mean)'
 
 // run regression
 forvalues d = 0/11 { 
 	di in red "***** WORKING ON DEATHS IN MONTH `d' ******"
-	reghdfe snf ib3.tt##i.treated if reldeath == `d', ///
+	reghdfe `1' ib3.tt##i.treated if reldeath == `d', ///
 		absorb(eventid ym) cluster(hhid)	
 	qui regsave using "$hoaglandoutput/regdata_d_`d'", replace ci p 
 }
 
 // quarterly regressions 
-qui reghdfe snf ib3.tt##i.treated if inrange(reldeath, 0, 2), ///
+qui reghdfe `1' ib3.tt##i.treated if inrange(reldeath, 0, 2), ///
 		absorb(eventid ym) cluster(hhid)	
 qui regsave using "$hoaglandoutput/regdata_q_1", replace ci p 
-qui reghdfe snf ib3.tt##i.treated if inrange(reldeath, 3, 5), ///
+qui reghdfe `1' ib3.tt##i.treated if inrange(reldeath, 3, 5), ///
 		absorb(eventid ym) cluster(hhid)	
 qui regsave using "$hoaglandoutput/regdata_q_2", replace ci p 
-qui reghdfe snf ib3.tt##i.treated if inrange(reldeath, 6, 8), ///
+qui reghdfe `1' ib3.tt##i.treated if inrange(reldeath, 6, 8), ///
 		absorb(eventid ym) cluster(hhid)	
 qui regsave using "$hoaglandoutput/regdata_q_3", replace ci p 
-qui reghdfe snf ib3.tt##i.treated if inrange(reldeath, 9, 11), ///
+qui reghdfe `1' ib3.tt##i.treated if inrange(reldeath, 9, 11), ///
 		absorb(eventid ym) cluster(hhid)	
 qui regsave using "$hoaglandoutput/regdata_q_4", replace ci p 
 
@@ -146,9 +139,9 @@ twoway (rcap ci_lower ci_upper reltime if inlist(model, 0, 3, 6, 9), color(gs10)
 	xtitle("Months Around Shock Spouse's First Heart Attack/Stroke") ///
 	xsc(r(-4(2)12)) xlab(-4(2)12) ///
 	legend(order(2 "Shock Spouse Died in Month 0" 3 "Shock Spouse Died in Month 3" 4 "Shock Spouse Died in Month 6" 5 "Shock Spouse Died in Month 9" ) rows(2) ring(0) position(11))
-graph save "${hoaglandoutput}/EventStudy_snf_SplitEffect_TimeOfDeath_$today.gph", replace
-graph export "${hoaglandoutput}/EventStudy_snf_SplitEffect_TimeOfDeath_$today.png", as(png) replace
-graph export "${hoaglandoutput}/EventStudy_snf_SplitEffect_TimeOfDeath_$today.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/EventStudy_`1'_SplitEffect_TimeOfDeath_$today.gph", replace
+graph export "${hoaglandoutput}/EventStudy_`1'_SplitEffect_TimeOfDeath_$today.png", as(png) replace
+graph export "${hoaglandoutput}/EventStudy_`1'_SplitEffect_TimeOfDeath_$today.pdf", as(pdf) replace
 restore
 
 
@@ -197,8 +190,8 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	xtitle("Months Around Shock Spouse's First Heart Attack/Stroke") ///
 	xsc(r(-4(1)11)) xlab(-4(1)11) ///
 	legend(order(2 "Shock Spouse Died in Quarter 1" 3 "Shock Spouse Died in Quarter 2" 4 "Shock Spouse Died in Quarter 3" 5 "Shock Spouse Died in Quarter 4" ) rows(2) ring(0) position(11))
-graph save "${hoaglandoutput}/EventStudy_snf_SplitEffect_TimeOfDeath_$today.gph", replace
-graph export "${hoaglandoutput}/EventStudy_snf_SplitEffect_TimeOfDeath_$today.png", as(png) replace
-graph export "${hoaglandoutput}/EventStudy_snf_SplitEffect_TimeOfDeath_$today.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/EventStudy_`1'_SplitEffect_TimeOfDeath_$today.gph", replace
+graph export "${hoaglandoutput}/EventStudy_`1'_SplitEffect_TimeOfDeath_$today.png", as(png) replace
+graph export "${hoaglandoutput}/EventStudy_`1'_SplitEffect_TimeOfDeath_$today.pdf", as(pdf) replace
 restore
 ********************************************************************************

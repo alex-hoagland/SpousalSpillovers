@@ -14,13 +14,6 @@
 	
 ***** Main Regression 
 use "${input_datapath}/weekpanel.dta" , clear
-
-if ("`2'" == "balanced") {
-	// keep only households where outcome spouse lives for at least a year post-event
-	cap drop bene_id
-	gen bene_id = response_id 
-	merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
-}
 	
 // aggregate to monthly level 
 gen reltime_months = floor(reltime_weeks/4)
@@ -32,13 +25,9 @@ replace year = year - 1 if treated == 0
 gen ym = ym(year, wknum)
 gen treated_post = (treated == 1 & reltime_weeks >= 0)
 
+// keep only households where outcome spouse lives for at least a year post-event
 if ("`2'" == "balanced") {
-	// keep only households where outcome spouse lives for at least a year post-event
-	gen test = death_dt - eventdate_index
-	gen todrop = (!missing(death_dt) & test <= 365)
-	bys index_id response_id: ereplace todrop = max(todrop) 
-	drop if todrop == 1
-	drop test todrop
+	drop if nosurvive == 1
 }
 
 // some additional outcomes 
@@ -191,7 +180,6 @@ else {
 	gsort reltime
 
 	// keep if abs(reltime) <= 4
-	local test = "`1'"
 	twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 		(scatter coef reltime, color(ebblue)) , ///
 		xline(-0.25, lpattern(dash)) legend(off) ///
@@ -200,8 +188,8 @@ else {
 		xsc(r(-4(2)12)) xlab(-4(2)12) ///
 		subtitle("Spillover Effect, Relative to Baseline Mean (`textmean'/1,000)", ///
 			position(11) justification(left) size(medsmall)) 
-	graph save "${hoaglandoutput}/EventStudy_`test'_${today}_`2'.gph", replace
-	graph export "${hoaglandoutput}/EventStudy_`test'_${today}_`2'.png", as(png) replace
-	graph export "${hoaglandoutput}/EventStudy_`test'_${today}_`2'.pdf", as(pdf) replace
+	graph save "${hoaglandoutput}/EventStudy_`1'_${today}_`2'.gph", replace
+	graph export "${hoaglandoutput}/EventStudy_`1'_${today}_`2'.png", as(png) replace
+	graph export "${hoaglandoutput}/EventStudy_`1'_${today}_`2'.pdf", as(pdf) replace
 }
 ********************************************************************************

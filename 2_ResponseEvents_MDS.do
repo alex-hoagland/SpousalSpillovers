@@ -11,35 +11,18 @@ the analysis dataset
 * NOTES:
 
 *******************************************************************************/
-version 15 // so that .gph files save in a way my old machine can read
-// set maxvar 100000
-// ssc install ereplace
 
-if `"`input_datapath'"' == "" {
-	global project_head "/homes/nber/kwtjima-dua58151/layton-DUA58151"
-	global head "$project_head/kwtjima-dua58151"
-	global input_datapath "$head/data/derived"
-}
-
-if `"`today'"' == "" {
-	global today: di %td_CYND date("$S_DATE", "DMY")
-	global today $today // second command removes leading spaces
-}
-
-// set scheme cblind1
-set seed 081323
 
 ********************************************************************************
 *** Globals ********************************************************************
 ********************************************************************************
 
-// Path to cleaned dataset
-if `"$raw_stacked_mds"' == "" global raw_stacked_mds "${input_datapath}/responseevents-stacked-MDS.dta"
-if `"$cleaned_mds"' == "" global cleaned_mds "${input_datapath}/responseevents-MDS.dta"
-if `"$raw_stacked_mds_backup"' == "" global raw_stacked_mds_backup "${input_datapath}/responseevents-MDS_backup.dta"
-if `"$mds"' == "" global mds "$project_head/extracts/mds/20220808/100pct"
-if `"$cleaned_stays"' == "" global cleaned_stays "${input_datapath}/MDS-stays.dta"
-if `"$cleaned_stays_1p"' == "" global cleaned_stays_1p "${input_datapath}/MDS-stays_1p.dta"
+// Paths
+global project_head "/homes/nber/kwtjima-dua58151/layton-DUA58151"
+global mds "$project_head/extracts/mds/20220808/100pct"
+global raw_stacked_mds "${input_datapath}/responseevents-stacked-MDS.dta"
+global cleaned_mds "${input_datapath}/responseevents-MDS.dta"
+global cleaned_stays "${input_datapath}/MDS-stays.dta"
 
 
 // Final dta, empty initially, to be appended with observations
@@ -113,24 +96,6 @@ gen dschrg_dt = trgt_dt if inlist(dschrg_cd, "10", "11", "12")
 gen year = 2017
 append using "${raw_stacked_mds}"
 save "${raw_stacked_mds}", replace
-save "$raw_stacked_mds_backup", replace
-
-
-/* Checks */
-// this actually refers to discharges inlist(dschrg_cd, "10", "11", "12")
-
-use "$raw_stacked_mds_backup", clear
-
-// take 1% random sample
-preserve
-contract bene_id
-sample 1
-keep bene_id
-save "random_bene_ids.dta", replace
-restore
-merge m:1 bene_id using "random_bene_ids.dta", keep(3) nogen
-save "${input_datapath}/responseevents-MDS_backup_1p.dta", replace
-erase "random_bene_ids.dta"
 
 
 ********************************************************************************
@@ -260,17 +225,6 @@ foreach D in trgt entry dschrg reentry {
 						& missing(dschrg_dt[_n+1]) ///
 						& trgt_dt[_n] < entry_dt[_n+1] ///
 						& _n < _N
-
-
-				// Sudden reentry without prior discharge
-				// This just takes the first reentry (but could be erroraneous)
-	// 			bysort bene_id fac_int_id (order): ///
-	// 				replace stay_ends = 1 ///
-	// 					if inlist(year, 2008, 2009) ///
-	// 					& missing(stay_ends) ///
-	// 					& missing(reentry_dt) ///
-	// 					& !missing(reentry_dt[_n+1]) ///
-	// 					& _n < _N
 
 				// 180 days since last assessment
 				bys bene_id fac_int_id (order): ///
@@ -715,220 +669,7 @@ foreach D in trgt entry dschrg reentry {
 contract bene_id entry_dt_ext dschrg_dt_ext
 drop _freq
 
-// bys bene_id (entry_dt_ext): ///
-// 	gen visit = _n
-//
-// reshape wide entry_dt_ext dschrg_dt_ext, i(bene_id) j(visit)
-
 
 // Export
 save "${cleaned_stays}", replace
 
-
-// take 1% random sample
-preserve
-contract bene_id
-sample 1
-keep bene_id
-save "random_bene_ids.dta", replace
-restore
-merge m:1 bene_id using "random_bene_ids.dta", keep(3) nogen
-
-
-// Export
-save "${cleaned_stays_1p}", replace
-erase "random_bene_ids.dta"
-
-
-
-
-
-
-/* Archive
-
-	// Having a dschrg_dt post 2009 means discharge
-	// Discharge date is always equal to target date
-
-
-	// Cleaned column (copy over all the existing discharge dates)
-	gen dschrg_dt_ext = dschrg_dt
-
-
-	// Manually split if last assessment is over 6 months ago
-	bys bene_id fac_int_id (order): ///
-		replace dschrg_dt_ext = trgt_dt ///
-			if assmnt_gap[_n+1] >= 180 ///
-			& !missing(assmnt_gap[_n+1] ) ///
-			& missing(dschrg_dt_ext) ///
-			& _n < _N
-
-    // Manually add a discharge date if it's the last one
-    // and it's not in Jun-Dec 2017
-    bysort bene_id fac_int_id (order): ///
-        replace dschrg_dt_ext = trgt_dt ///
-			if _n == _N ///
-			& (trgt_dt[_n] - td(30jun2017) < 0) ///
-			& missing(dschrg_dt_ext[_n])
-
-	// Manually add missing discharge date when entry_dt changes
-	// but no discharge record
-	bys bene_id fac_int_id (order): ///
-		replace dschrg_dt_ext = trgt_dt ///
-			if inlist(year, 2008, 2009) ///
-			& missing(dschrg_dt_ext) ///
- 			& entry_dt[_n] != entry_dt[_n+1] ///
-			& !missing(entry_dt[_n]) ///
-			& !missing(entry_dt[_n+1]) ///
-			& missing(dschrg_dt_ext[_n+1]) ///
-			& _n < _N
-
-
-	// if multiple discharges lined up, take latest
-	// (assume false discharge records)
-	gsort bene_id fac_int_id -order
-	by bene_id fac_int_id: ///
-		replace dschrg_dt_ext = dschrg_dt_ext[_n-1] ///
-		if !missing(dschrg_dt) ///
-		& !missing(dschrg_dt[_n-1]) ///
-		& missing(entry_dt) ///
-		& missing(reentry_dt) ///
-		& _n > 1
-
-
-
-
-	// 2008 2009 Portion
-
-		replace entry_dt_ext = reentry_dt ///
-			if inlist(year, 2008, 2009)
-
-		bys bene_id fac_int_id (order): ///
-			replace entry_dt_ext = trgt_dt ///
-				if inlist(year, 2008, 2009) ///
-				& trgt_dt > reentry_dt ///
-				& !missing(dschrg_dt[_n-1])
-
-
-		// First ever stays
-
-			// Grab entry date for cases of first time in SNF
-			// entry_dt identifies 1st time stays
-			// Should be first observation for each bene_id fac_int_id group
-			bysort bene_id fac_int_id (order): ///
-				replace entry_dt_ext = entry_dt ///
-				if inlist(year, 2008, 2009) ///
-				& missing(entry_dt_ext) ///
-				& _n == 1
-
-			// Use target date if entry_date is empty
-			bysort bene_id fac_int_id (order): ///
-				replace entry_dt_ext = trgt_dt ///
-				if inlist(year, 2008, 2009) ///
-				& missing(entry_dt_ext) ///
-				& missing(entry_dt) ///
-				& _n == 1
-
-
-	// 2010 - 2017 Portion
-
-		// Use entry_dt if is first
-		bysort bene_id fac_int_id (order): ///
-			replace entry_dt_ext = entry_dt ///
-			if year >= 2010 ///
-			& _n == 1
-
-
-	// Not first stays (consistent for both time periods)
-
-	// Use either entry_dt or trgt_dt, whichiver is closest to last dschrg_dt
-	bysort bene_id fac_int_id (order): ///
-		replace entry_dt_ext = entry_dt ///
-		if missing(entry_dt_ext) ///
-		& !missing(dschrg_dt[_n-1]) ///
-		& !missing(entry_dt[_n]) ///
-		& entry_dt[_n] > dschrg_dt[_n-1] ///
-		& _n != 1
-
-	bysort bene_id fac_int_id (order): ///
-		replace entry_dt_ext = trgt_dt ///
-		if missing(entry_dt_ext) ///
-		& !missing(dschrg_dt[_n-1]) ///
-		& _n != 1 ///
-		& ///
-			((!missing(entry_dt[_n]) ///
-			 & entry_dt[_n] > dschrg_dt[_n-1] ///
-			 & trgt_dt[_n] > dschrg_dt[_n-1] ///
-			 & trgt_dt[_n] < entry_dt[_n]) ///
-		  | (missing(entry_dt[_n]) ///
-			 & trgt_dt[_n] > dschrg_dt[_n-1] ///
-			 & trgt_dt[_n] < entry_dt[_n]))
-
-
-	// Manual split at 180
-	bysort bene_id fac_int_id (order): ///
-		replace entry_dt_ext = trgt_dt ///
-		if missing(entry_dt_ext) ///
-		& assmnt_gap >= 180 ///
-		& !missing(assmnt_gap)
-
-	// Multiple reentries in a row with no change in dschrg_dt
-	// use latest entry date to overwrit
-	// idk why 2008 2009 has a lot of weird submissions
-	// make sure largest reentry_dt is at the bottom then backfill
-	bys bene_id fac_int_id (order): ///
-		replace entry_dt_ext = entry_dt_ext[_n-1] ///
-			if inlist(year, 2008, 2009) ///
-			& !missing(reentry_dt[_n]) ///
-			& !missing(reentry_dt[_n-1]) ///
-			& reentry_dt[_n-1] >= reentry_dt[_n] ///
-			& _n > 1
-
-	gsort bene_id fac_int_id -order
-	bys bene_id fac_int_id: ///
-		replace entry_dt_ext = entry_dt_ext[_n-1] ///
-			if inlist(year, 2008, 2009) ///
-			& !missing(reentry_dt[_n]) ///
-			& !missing(reentry_dt[_n-1]) ///
-			& _n > 1
-
-
-
-
-
-// (2) Create continuum using entry points	// ISSUE with 2008/9 since reentry sometimes shows up not in the first row mmmmmmDDXsXUmXW 04jun2008
-	bysort bene_id fac_int_id (order): ///
-		replace entry_dt_ext = entry_dt_ext[_n-1] ///
-		if missing(entry_dt_ext) ///
-		& missing(dschrg_dt[_n-1]) ///
-		& _n > 1
-
-	gsort bene_id fac_int_id -order
-	bysort bene_id fac_int_id: ///
-		replace entry_dt_ext = entry_dt_ext[_n-1] ///
-		if missing(entry_dt_ext) ///
-		& missing(dschrg_dt[_n-1]) ///
-		& _n > 1
-
-
-	// Multiple discharges with no change in entry_dt
-	// take earliest entry_dt_ext
-	bys bene_id fac_int_id (order): ///
-		replace entry_dt_ext = entry_dt_ext[_n-1] ///
-			if !missing(dschrg_dt[_n]) ///
-			& !missing(dschrg_dt[_n-1]) ///
-			& _n > 1
-
-
-	// entry_dt suddenly changes with no previous dschrg
-	// keep previous entry_dt
-	bys bene_id fac_int_id (order): ///
-		replace entry_dt_ext = entry_dt_ext[_n-1] ///
-			if entry_dt_ext[_n] != entry_dt_ext[_n-1] ///
-			& dschrg_dt_ext[_n] == dschrg_dt_ext[_n-1] ///
-			& !missing(entry_dt_ext[_n]) ///
-			& !missing(entry_dt_ext[_n-1]) ///
-			& !missing(dschrg_dt_ext[_n]) ///
-			& !missing(dschrg_dt_ext[_n-1]) ///
-			& _n > 1
-
-	*/

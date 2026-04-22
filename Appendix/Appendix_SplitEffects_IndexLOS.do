@@ -12,21 +12,7 @@
 
 ***** Main Regression 
 use "${input_datapath}/weekpanel.dta" if nonfatal_tosnf == 1 | nonfatal_torehab == 1 | nonfatal_tohome == 1 , clear 
-// use "${input_datapath}/weekpanel_1p.dta" if nonfatal_to`1' == 1 | nonfatal_torehab == 1 | nonfatal_tohome == 1 , clear 
-
-if ("`2'" == "balanced" ) {
-	cap drop bene_id
-	gen bene_id = response_id
-	merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
-	gen test = death_dt - eventdate_index
-	gen todrop = (!missing(death_dt) & test <= 365)
-	bys index_id response_id: ereplace todrop = max(todrop)
-	drop if todrop == 1
-	drop test todrop
-}
-	
 	// keep only nonfatal discharges
-	
 	
 // also drop response_ids if they were hospitalized in the 12 weeks prior to event 
 gen todrop = (hospitalization == 1 & inrange(reltime_weeks, -12, -1))
@@ -48,9 +34,14 @@ gen tt = reltime_months + 4 // makes regression code easier to have no negative 
 keep if inrange(reltime_months, -5, 12) 
 replace tt = 3 if reltime_months <= -5 // additional reference points
 
-gen test = runiform() 
-bys index_id eventid: ereplace test = mean(test) 
-keep if (test < .5 & treated == 0) | (test >= .5 & treated == 1)
+// keep only households where outcome spouse lives for at least a year post-event
+if ("`2'" == "balanced" ) { 
+	drop if nosurvive == 1
+}
+
+// gen test = runiform() 
+// bys index_id eventid: ereplace test = mean(test) 
+// keep if (test < .5 & treated == 0) | (test >= .5 & treated == 1)
 
 // split based on index LOS
 gen los_14 = (index_los >= 14)  // 4.5% of sample
@@ -59,7 +50,7 @@ gen los_3 = (inrange(index_los, 3, 6)) // 59% of sample
 gen los_1 = (inrange(index_los, -1, 2)) // 20% of sample
 
 gcollapse (max) `1' treated* los_*, by(index_id hhid eventid ym tt reltime_months ) fast
-sum `1' if (treated == 1 & reltime_months < 0)
+sum `1' if (treated == 1 & reltime_ < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000
 replace `1' = `1' / `premean' // * 100 // rescale coefficients to be % of outcome
@@ -108,33 +99,15 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	xline(-0.25, lpattern(dash))  ///
 	yline(0) ///
 	legend(order(2 "<3 days" 3 "3--6 days" 4 "7--13 days" 5 "14+ days") ///
-		position(10) ring(0) cols(2) size(vsmall)) ///
-	xtitle("Months Around Index Spouse's First Heart Attack/Stroke") ///
+		position(11) ring(0) cols(2)) ///
+	xtitle("Months Around Shock Spouse's First Heart Attack/Stroke") ///
 	xsc(r(-4(1)12)) xlab(-4(1)12) ///
-	subtitle("Spillover Effect, by Index Shock LOS", ///
+	subtitle("Spillover Effect, by Shock Spouse LOS", ///
 		position(11) justification(left) size(medsmall)) 
 		
 graph save "${hoaglandoutput}/SplitEffects_IndexLOS_`1'_$today.gph", replace
 graph export "${hoaglandoutput}/SplitEffects_IndexLOS_`1'_$today.png", as(png) replace
 graph export "${hoaglandoutput}/SplitEffects_IndexLOS_`1'_$today.pdf", as(pdf) replace
-
-twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
-	(scatter coef reltime if model == 1, color(ebblue) msymbol(square)) ///
-	(scatter coef reltime if model == 2, color(midgreen) msymbol(triangle)) ///
-	(scatter coef reltime if model == 3, color(dknavy) msymbol(diamond)) ///
-	(scatter coef reltime if model == 4, color(purple) msymbol(circle)), ///
-	xline(-0.25, lpattern(dash))  ///
-	yline(0) ///
-	legend(order(2 "<3 days" 3 "3--6 days" 4 "7--13 days" 5 "14+ days") ///
-		position(12) ring(1) rows(1) size(vsmall)) ///
-	xtitle("Months Around Index Spouse's First Heart Attack/Stroke") ///
-	xsc(r(-4(1)12)) xlab(-4(1)12) ///
-	subtitle("Spillover Effect, by Index Shock LOS", ///
-		position(11) justification(left) size(medsmall)) 
-		
-graph save "${hoaglandoutput}/SplitEffects_IndexLOS_`1'_v2_$today.gph", replace
-graph export "${hoaglandoutput}/SplitEffects_IndexLOS_`1'_v2_$today.png", as(png) replace
-graph export "${hoaglandoutput}/SplitEffects_IndexLOS_`1'_v2_$today.pdf", as(pdf) replace
 ********************************************************************************
 
 // clean up data

@@ -29,32 +29,25 @@ gen tt = reltime_months + 4 // makes regression code easier to have no negative 
 keep if inrange(reltime_months, -5, 12) 
 replace tt = 3 if reltime_months <= -5 // additional reference points
 
-if ("`1'" == "balanced" ) { 
-	// keep only households where outcome spouse lives for at least a year post-event
-	cap drop bene_id
-	gen bene_id = response_id 
-	merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
-	gen test = death_dt - eventdate_index
-	gen todrop = (!missing(death_dt) & test <= 365)
-	bys index_id response_id: ereplace todrop = max(todrop) 
-	drop if todrop == 1
-	drop test todrop
+// keep only households where outcome spouse lives for at least a year post-event
+if ("`2'" == "balanced" ) { 
+	drop if nosurvive == 1
 }
 
-gcollapse (max) snf treated* fatal_*, by(response_id index_id hhid eventid ym tt reltime_months ) fast
+gcollapse (max) `1' treated* fatal_*, by(response_id index_id hhid eventid ym tt reltime_months ) fast
 
 // gen test = runiform() 
 // bys Shock_id: ereplace test = mean(test) 
 // keep if (test < .5 & treated == 0) | (test >= .5 & treated == 1) 
 
-sum snf if treated == 1 & reltime < 0
-replace snf = snf / `r(mean)'
+sum `1' if treated == 1 & reltime < 0
+replace `1' = `1' / `r(mean)'
 
 // run regression for 1 year fatal 
-reghdfe snf ib3.tt##i.treated if fatal_1year  == 1, ///
+reghdfe `1' ib3.tt##i.treated if fatal_1year  == 1, ///
 	absorb(eventid ym) cluster(hhid)	
 regsave using "$hoaglandoutput/fatalshock", replace ci p 
-reghdfe snf ib3.tt##i.treated if fatal_1year == 0, ///
+reghdfe `1' ib3.tt##i.treated if fatal_1year == 0, ///
 	absorb(eventid ym) cluster(hhid)
 regsave using "$hoaglandoutput/nonfatalshock",  replace ci p 
 
@@ -94,23 +87,23 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	xsc(r(-4(2)12)) xlab(-4(2)12) ///
 	legend(order(2 "Nonfatal Shock" 3 "Fatal Shock") rows(1) ring(0) position(11))
 if ("`1'" == "balanced") {
-	graph save "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock-1year_balanced_$today.gph", replace
-graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock-1year_balanced_$today.png", as(png) replace
-graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock-1year_balanced_$today.pdf", as(pdf) replace
+	graph save "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock-1year_balanced_$today.gph", replace
+graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock-1year_balanced_$today.png", as(png) replace
+graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock-1year_balanced_$today.pdf", as(pdf) replace
 }
 else {
-graph save "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock-1year_$today.gph", replace
-graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock-1year_$today.png", as(png) replace
-graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock-1year_$today.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock-1year_$today.gph", replace
+graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock-1year_$today.png", as(png) replace
+graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock-1year_$today.pdf", as(pdf) replace
 }
 restore
 
 /*
 // run regression
-reghdfe snf ib3.tt##i.treated if fatal_d  == 1, ///
+reghdfe `1' ib3.tt##i.treated if fatal_d  == 1, ///
 	absorb(eventid ym) cluster(hhid)	
 regsave using "$hoaglandoutput/fatalshock", replace ci p 
-reghdfe snf ib3.tt##i.treated if fatal_d == 0, ///
+reghdfe `1' ib3.tt##i.treated if fatal_d == 0, ///
 	absorb(eventid ym) cluster(hhid)
 regsave using "$hoaglandoutput/nonfatalshock",  replace ci p 
 
@@ -150,24 +143,24 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	xsc(r(-4(2)12)) xlab(-4(2)12) ///
 	legend(order(2 "Nonfatal Shock" 3 "Fatal Shock") rows(1) ring(0) position(11))
 if ("`1'" == "balanced" ) { 
-	graph save "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock_balanced_$today.gph", replace
-	graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock_balanced_$today.png", as(png) replace
-	graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock_balanced_$today.pdf", as(pdf) replace
+	graph save "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock_balanced_$today.gph", replace
+	graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock_balanced_$today.png", as(png) replace
+	graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock_balanced_$today.pdf", as(pdf) replace
 }
 else {
-	graph save "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock_$today.gph", replace
-	graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock_$today.png", as(png) replace
-	graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock_$today.pdf", as(pdf) replace
+	graph save "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock_$today.gph", replace
+	graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock_$today.png", as(png) replace
+	graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock_$today.pdf", as(pdf) replace
 }
 // restore
 
 
 // // run regression based on 30 day mortality, not discharge mortality
 // cap graph drop * 
-// reghdfe snf ib3.tt##i.treated if fatal_30  == 1, ///
+// reghdfe `1' ib3.tt##i.treated if fatal_30  == 1, ///
 // 	absorb(eventid ym) cluster(hhid)	
 // regsave using "$hoaglandoutput/fatalshock", replace ci p 
-// reghdfe snf ib3.tt##i.treated if fatal_30 == 0, ///
+// reghdfe `1' ib3.tt##i.treated if fatal_30 == 0, ///
 // 	absorb(eventid ym) cluster(hhid)
 // regsave using "$hoaglandoutput/nonfatalshock",  replace ci p 
 //
@@ -206,8 +199,8 @@ else {
 // 	xtitle("Months Around Shock Spouse's First Heart Attack/Stroke") ///
 // 	xsc(r(-4(2)12)) xlab(-4(2)12) ///
 // 	legend(order(2 "Nonfatal Shock" 3 "Fatal Shock") rows(1) ring(0) position(11))
-// graph save "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock-30day_$today.gph", replace
-// graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock-30day_$today.png", as(png) replace
-// graph export "${hoaglandoutput}/EventStudy_snf_fatalnonfatalshock-30day_$today.pdf", as(pdf) replace
+// graph save "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock-30day_$today.gph", replace
+// graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock-30day_$today.png", as(png) replace
+// graph export "${hoaglandoutput}/EventStudy_`1'_fatalnonfatalshock-30day_$today.pdf", as(pdf) replace
 // restore
 ********************************************************************************/

@@ -12,11 +12,6 @@
 
 ***** Main Regression 
 use "${input_datapath}/weekpanel.dta", clear 
-
-// keep only households where outcome spouse lives for at least a year post-event
-cap drop bene_id
-gen bene_id = response_id 
-merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
 	
 // aggregate to monthly level 
 gen reltime_months = floor(reltime_weeks/4)
@@ -33,11 +28,9 @@ keep if inrange(reltime_months, -5, 12)
 replace tt = 3 if reltime_months <= -5 // additional reference points
 
 // keep only households where outcome spouse lives for at least a year post-event
-gen test = death_dt - eventdate_index
-gen todrop = (!missing(death_dt) & test <= 365)
-bys index_id response_id: ereplace todrop = max(todrop) 
-drop if todrop == 1
-drop test todrop
+if ("`2'" == "balanced" ) { 
+	drop if nosurvive == 1
+}
 
 // gen test = runiform() 
 // bys index_id eventid: ereplace test = mean(test) 
@@ -71,15 +64,15 @@ restore
 
 merge m:1 response_id using "$input_datapath/tomerge.dta", keep(3) nogenerate
 
-gcollapse (max) snf treated* race_*, by(index_id hhid eventid ym tt reltime_months ) fast
-sum snf if (treated == 1 & reltime_ < 0)
+gcollapse (max) `1' treated* race_*, by(index_id hhid eventid ym tt reltime_months ) fast
+sum `1' if (treated == 1 & reltime_ < 0)
 local premean: di %5.4fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000
-replace snf = snf / `premean' // * 100 // rescale coefficients to be % of outcome
+replace `1' = `1' / `premean' // * 100 // rescale coefficients to be % of outcome
 
 // split regression for each group 
 foreach v of varlist race_* { 
-	reghdfe snf ib3.tt##i.treated if `v'== 1, ///
+	reghdfe `1' ib3.tt##i.treated if `v'== 1, ///
 		absorb(eventid ym) cluster(hhid)
 	regsave using "$input_datapath/figdata_`v'.dta", replace ci p
 }
@@ -122,7 +115,7 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	subtitle("Spillover Effect, by Outcome Spouse Race", ///
 		position(11) justification(left) size(medsmall)) 
 		
-graph save "${hoaglandoutput}/SplitEffects_ResponseRace_snf_$today.gph", replace
-graph export "${hoaglandoutput}/SplitEffects_ResponseRace_snf_$today.png", as(png) replace
-graph export "${hoaglandoutput}/SplitEffects_ResponseRace_snf_$today.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/SplitEffects_ResponseRace_`1'_$today.gph", replace
+graph export "${hoaglandoutput}/SplitEffects_ResponseRace_`1'_$today.png", as(png) replace
+graph export "${hoaglandoutput}/SplitEffects_ResponseRace_`1'_$today.pdf", as(pdf) replace
 ********************************************************************************

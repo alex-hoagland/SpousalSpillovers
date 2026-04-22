@@ -16,6 +16,7 @@
 **** FIRST, IDENTIFY SPOUSES BASED ON PREVIOUS YEAR ****
 ****************************************************************
 
+// should this be 3?
 local g = 4 // gap in years
 
 use "${input_datapath}/indexevents_base.dta", clear	
@@ -224,14 +225,107 @@ compress
 save "${input_datapath}/ax_weekpanel_`g'yrs.dta", replace // should have about 113M observations
 ********************************************************************************/
 
+cap gen bene_id = response_id 
+
+/* For each bene_id reltime_week pair, generate new column "snf_mds" that 
+   is 1 if in SNF and 0 otherwise. Match back to main dataset. */
+
+// save "${input_datapath}/weekpanel_backup.dta", replace
+  
+preserve
+
+// Quick reformatting
+keep bene_id eventdate_index reltime_weeks snf
+
+// Merge with MDS stays so each bene_id reltime_week pair has new columns
+// entry_dt_ext and dschrg_dt_ext for each MDS SNF visit bene_id has.
+joinby bene_id using "${input_datapath}/MDS-stays.dta", unmatched(master)
+
+
+// Check if bene_id reltime_week pair is within entry_dt_ext and 
+// dschrg_dt_ext
+gen day = eventdate_index + 7*reltime_weeks 
+format day %td
+gen snf_mds = 0
+forvalues D = 0/6 {
+	replace snf_mds = inrange(day+`D', entry_dt_ext , dschrg_dt_ext) ///
+	if snf_mds == 0 /// only add (since they might be in snf on day 0 but not day 1)
+	& !missing(entry_dt_ext) // stata inrange treats . as -inf and + inf
+}	
+		
+
+// New SNF outcome: entry into SNF
+gen snf_mds_entry = 0
+bysort bene_id eventdate_index entry_dt_ext (reltime_weeks): ///
+	replace snf_mds_entry = 1 ///
+	if (snf_mds == 1 ///
+	   & snf_mds[_n-1] == 0 ///
+	   & _n > 1) ///
+	| (snf_mds == 1 & ///
+	  (day-7 <= entry_dt_ext) /// not within the visit a week ago
+	  & _n == 1)
+	
+	
+/* Checks */
+	assert snf_mds == 0 & snf_mds_entry == 0 ///
+		if missing(entry_dt_ext)
+	
+	assert entry_dt_ext <= dschrg_dt_ext ///
+		if !missing(entry_dt_ext)
+
+	assert snf_mds == 1 ///
+		if snf_mds_entry == 1
+	
+// Each bene_id is duplicated the number of stays they've had so collapse 
+// to bene_id reltime_week level and take the max 
+collapse (max) snf snf_mds snf_mds_entry, ///
+	by(bene_id eventdate_index reltime_weeks)
+
+	
+// New SNF outcome: in MDS but not in Medpar
+gen snf_mds_only = (snf_mds == 1 & snf == 0)
+
+
+/* Checks */
+	
+	// Weekly match rate should be about 94.5% (last checked)
+	qui sum snf_mds if snf == 1
+	local mu = r(mean)
+	cap assert `mu' >= 0.945
+	if _rc {
+		dis "match rate is `mu'"
+		error 9
+	}
+
+// Save dataset with new columns
+tempfile snf_mds_months
+save "${input_datapath}/snf_mds_months.dta", replace
+restore
+
+// Merge main panel with new columns 
+merge m:1 bene_id eventdate_index reltime_weeks using "${input_datapath}/snf_mds_months.dta", nogen
+
+
+// Indicator for if outcome spouse dies within a year of shock
+cap drop bene_id
+gen bene_id = response_id 
+merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
+
+gen test = death_dt - eventdate_index
+gen nosurvive = (!missing(death_dt) & test <= 365*3)
+bys index_id response_id: ereplace nosurvive = max(nosurvive) 
+drop test 
+
+compress
+save "${input_datapath}/ax_weekpanel_`g'yrs.dta", replace 
+
+********************************************************************************/
+
+
 
 ***** Main regression
 use "${input_datapath}/ax_weekpanel_`g'yrs.dta", clear
 
-// keep only households where outcome spouse lives for at least a year post-event
-cap drop bene_id
-gen bene_id = response_id 
-merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
 	
 // aggregate to monthly level 
 gen reltime_months = floor(reltime_weeks/12) // in quarters
@@ -244,23 +338,19 @@ gen ym = ym(year, wknum)
 gen treated_post = (treated == 1 & reltime_weeks >= 0)
 
 // keep only households where outcome spouse lives for at least a year post-event
-gen test = death_dt - eventdate_index
-gen todrop = (!missing(death_dt) & test <= 365*3)
-bys index_id response_id: ereplace todrop = max(todrop) 
-drop if todrop == 1
-drop test todrop
+drop if nosurvive == 1
 
 gen tt = reltime_months + 3 // makes regression code easier to have no negative values here -- note that 3 is now the base period (-1 + 3 = 2)
 keep if inrange(reltime_months, -4, 12) 
 replace tt = 2 if reltime_months <= -4 // additional reference point for regression
 
-gcollapse (max) snf treated* index_fem, by(index_id response_id hhid eventid ym tt reltime_months ) fast
+gcollapse (max) `1' treated* index_fem, by(index_id response_id hhid eventid ym tt reltime_months ) fast
 
 // rescale only for non-decomposed results
-sum snf if (treated == 1 & reltime_ < 0) // | treated == 0 
+sum `1' if (treated == 1 & reltime_ < 0) // | treated == 0 
 local premean: di %7.6fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000
-replace snf = snf / `premean' // rescale coefficients to be % of outcome
+replace `1' = `1' / `premean' // rescale coefficients to be % of outcome
 
 // robustness option 
 // gen test = runiform() 
@@ -268,7 +358,7 @@ replace snf = snf / `premean' // rescale coefficients to be % of outcome
 // keep if (test < .5 & treated == 0) | (test >= .5 & treated == 1)
 
 // run regression
-reghdfe snf ib2.tt##i.treated, ///
+reghdfe `1' ib2.tt##i.treated, ///
 	absorb(eventid ym) cluster(hhid)
 
 // make figure			
@@ -288,7 +378,6 @@ foreach v of varlist coef ci_* {
 gsort reltime
 
 // keep if abs(reltime) <= 4
-local test = "snf"
 twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	(scatter coef reltime, color(ebblue)) , ///
 	xline(-0.25, lpattern(dash)) legend(off) ///
@@ -297,8 +386,8 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) ///
 	xsc(r(-4(2)12)) xlab(-4(2)12) ///
 	subtitle("Spillover Effect, Relative to Baseline Mean (`textmean'/1,000)", ///
 		position(11) justification(left) size(medsmall)) 
-graph save "${hoaglandoutput}/LongRunEventStudy_`test'_${today}_`g'yrs.gph", replace
-graph export "${hoaglandoutput}/LongRunEventStudy_`test'_${today}_`g'yrs.png", as(png) replace
-graph export "${hoaglandoutput}/LongRunEventStudy_`test'_${today}_`g'yrs.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/LongRunEventStudy_`1'_${today}_`g'yrs.gph", replace
+graph export "${hoaglandoutput}/LongRunEventStudy_`1'_${today}_`g'yrs.png", as(png) replace
+graph export "${hoaglandoutput}/LongRunEventStudy_`1'_${today}_`g'yrs.pdf", as(pdf) replace
 ********************************************************************************
 
