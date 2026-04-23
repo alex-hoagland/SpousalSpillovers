@@ -15,11 +15,6 @@
 ***** Main Regression 
 use "${input_datapath}/weekpanel.dta" , clear 
 	
-// keep only households where outcome spouse lives for at least a year post-event
-cap drop bene_id
-gen bene_id = response_id 
-merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
-	
 // aggregate to monthly level 
 gen reltime_months = floor(reltime_weeks/4)
 gen workingdate = eventdate_index + 30*reltime_months
@@ -31,11 +26,7 @@ gen ym = ym(year, wknum)
 gen treated_post = (treated == 1 & reltime_weeks >= 0)
 
 // keep only households where outcome spouse lives for at least a year post-event
-gen test = death_dt - eventdate_index
-gen todrop = (!missing(death_dt) & test <= 365)
-bys index_id response_id: ereplace todrop = max(todrop) 
-drop if todrop == 1
-drop test todrop
+drop if nosurvive == 1
 
 gen tt = reltime_months + 4 // makes regression code easier to have no negative values here -- note that 3 is now the base period (-1 + 4 = 3)
 keep if inrange(reltime_months, -5, 12) 

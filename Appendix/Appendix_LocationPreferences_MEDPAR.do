@@ -14,11 +14,6 @@
 	
 ***** Main Regression 
 use "${input_datapath}/weekpanel.dta" , clear 
-
-// keep only households where outcome spouse lives for at least a year post-event
-cap drop bene_id
-gen bene_id = response_id 
-merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
 	
 // aggregate to monthly level 
 gen reltime_months = floor(reltime_weeks/4)
@@ -36,11 +31,7 @@ replace tt = 3 if reltime_months <= -5 // additional reference point(s)
 
 
 // keep only households where outcome spouse lives for at least a year post-event
-gen test = death_dt - eventdate_index
-gen todrop = (!missing(death_dt) & test <= 365)
-bys index_id response_id: ereplace todrop = max(todrop) 
-drop if todrop == 1
-drop test todrop
+drop if nosurvive == 1
 
 // define outcomes 
 replace samesnf = (snf == 1 & samesnf == 1) // doesn't change anything

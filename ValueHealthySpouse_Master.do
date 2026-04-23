@@ -50,8 +50,8 @@ do "${allcode}/3_ConstructPanel.do"
 do "$allcode/3a_SummaryStatsTable.do"
 
 // Figures 1, 2, Appendix Figure A7: SNF effects -- overall MDS, MEDPAR (and entry, for Appendix)
-do "$allcode/4_MainEventStudy_MEDPAR.do" "snf" "balanced"
-do "$allcode/4_MainEventStudy_MDS.do" "snf_mds" "balanced" // this runs all outcomes, doesn't need additional arguments
+do "$allcode/4_MainEventStudy.do" "snf" "balanced"
+do "$allcode/4_MainEventStudy.do" "snf_mds" "balanced"
 do "$allcode/4a_MainEventStudy_snf-entry.do" "balanced"
 	// constructs data for the MEDPAR version of the Appendix figure (the MDS output is estimated above)
 
@@ -72,14 +72,18 @@ do "$allcode/5b_HealthEffectsTable_AverageEffects_MEDPAR.do" "fall" "balanced"
 do "$allcode/5b_HealthEffectsTable_AverageEffects_MEDPAR.do" "snf_hosp" "balanced"
 do "$allcode/5a_MakeTable_MEDPAR.do" // produces tex code for table
 
+
 // Figure 3: split by fatal/nonfatal
-do "$allcode/6_MainEventStudy_FatalitySplit_MDS.do" "balanced" // MEDPAR code exists as well
+do "$allcode/6_MainEventStudy_FatalitySplit.do" "snf_mds" "balanced" // MEDPAR code exists as well
+
 
 // FIGURE 4: Stratified by if the outcome spouse has a chronic condition
-do "${allcode}/7a_SplitEffects_ChronicCondition_MDS.do" "snf" "balanced"
+do "${allcode}/7a_SplitEffects_ChronicCondition.do" "snf" "balanced"
+
 
 // FIGURE 5: Stratified by shock spouse's severity
-do "${allcode}/7b_SplitEffects_IndexDischarge_MDS.do" "snf" "balanced"
+do "${allcode}/7b_SplitEffects_IndexDischarge.do" "snf" "balanced"
+
 
 // Figure 6: Mortality Effects
 do "$allcode/8_MortalityEffects.do"
@@ -117,17 +121,17 @@ do "$allcode/Appendix/Appendix_Validate_Specification_MEDPAR.do" // TODO: update
 do "$allcode/Appendix/Appendix_Circularity.do" "balanced"
 
 // Figure A3: robustness to alternative event definitions
-do "$allcode/Appendix/Appendix_ExtraHouseholdEvents_EventStudy_MEDPAR.do" // -- balanced
-do "$allcode/Appendix/Appendix_Robustness_No2YearRequirement_MEDPAR.do" // -- balanced
+do "$allcode/Appendix/Appendix_ExtraHouseholdEvents_EventStudy.do" "snf" // -- balanced
+do "$allcode/Appendix/Appendix_Robustness_No2YearRequirement.do" "snf" // -- balanced
 
 // Figure A4: gender symmetry
-do "$allcode/Appendix/Appendix_MainEventStudy_gendersplit_MEDPAR.do" "snf"
+do "$allcode/Appendix/Appendix_MainEventStudy_gendersplit.do" "snf"
 
 // Figure A5: weekly results
-do "$allcode/Appendix/Appendix_EventStudy_weeks_MEDPAR.do" "snf" "balanced"
+do "$allcode/Appendix/Appendix_EventStudy_weeks.do" "snf" "balanced"
 
 // Figure A6: Long-run results
-do "$allcode/Appendix/Appendix_LongrunResults_MEDPAR.do"
+do "$allcode/Appendix/Appendix_LongrunResults.do" "snf"
 
 // Figure A7: made above
 
@@ -139,16 +143,16 @@ do "$allcode/Appendix/Appendix_LocationPreferences_MEDPAR.do" "balanced"
 // Figure A10: non-SNF nursing homes, made above
 
 // Figure A11: Split by Age (gaps)
-do "$allcode/Appendix/Appendix_Eventstudy_agesplits_MEDPAR.do" "balanced"
+do "$allcode/Appendix/Appendix_Eventstudy_agesplits.do" "snf" "balanced"
 
 // Figure A12: Split by Race
-do "$allcode/Appendix/Appendix_SplitEffects_Race_MEDPAR.do" "balanced"
+do "$allcode/Appendix/Appendix_SplitEffects_Race.do" "snf" "balanced"
 
 // Figure A13: Split by Index LOS
-do "$allcode/Appendix/Appendix_SplitEffects_IndexLOS_MDS.do" "balanced"
+do "$allcode/Appendix/Appendix_SplitEffects_IndexLOS.do" "snf_mds" "balanced"
 
 // Figure A14: SNF Effects by Time of Death over Year
-do "$allcode/Appendix/Appendix_SplitEffect_TimeofDeath_MEDPAR.do" "balanced"
+do "$allcode/Appendix/Appendix_SplitEffect_TimeofDeath.do" "snf" "balanced"
 
 // Figure A15: Unbalanced panel results (can be constructed using the code above)
 

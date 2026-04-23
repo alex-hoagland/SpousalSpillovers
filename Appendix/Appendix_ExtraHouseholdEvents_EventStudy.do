@@ -16,99 +16,10 @@
 **** UPDATE PANEL TO ALLOW MULTIPLE EVENTS  ****
 ****************************************************************
 
-****************************************************************
-**** FIRST, IDENTIFY RELEVANT INDEX EVENTS ****
-****************************************************************
-
-use "${input_datapath}/indexevents.dta", clear	
-rename bene_id index_id
-	
-rename year file_year	
-foreach v of var dgnscd* ad_d dsch* admsnday sslssnf dstntncd sex los female-deathdate orgnpinm adrd_admit { 
-	rename `v' index_`v' 
-}
-cap rename index_file_year file_year
-
-// restrictions to impose
-replace file_year = year(eventdate_index)
-drop if file_year <= 2010 // need 2 full years of lookback, can only merge in spouses for 2010 and need that to be year before event
-// note: will drop 2017 for treated year at the end 
-// keep if inrange(file_year, 2011, 2016) // to generate treatment and control groups 
-	// by this point we are down to ~37M events
-
-drop if inlist(substr(index_ad_dgns, 1, 1), "S", "T") // no external injuries as primary diagnosis
-forvalues i = 1/5 { // no external injuries in first 5 diagnoses
-	drop if inlist(substr(index_dgnscd`i', 1, 1), "S", "T")
-} // not a lot thrown out here -- still around 30M events
-
-// limit to an index spouse's heart attack or stroke
-gen heart_stroke = ((inlist(substr(index_ad_dgns,1, 3), "410", "I21") | inlist(substr(index_dgnscd1,1, 3), "410", "I21")))
-replace heart_stroke = 1 if (inlist(substr(index_ad_dgns,1, 3), "I63", "433", "434") | inlist(substr(index_dgnscd1,1, 3), "I63", "433", "434"))
-keep if heart_stroke == 1 // down to roughly 2M events between 2011 and 2016
-
-compress
-save "${input_datapath}/indexevents_base_no2y.dta", replace
-********************************************************************************
-
-
-****************************************************************
-**** FIRST, IDENTIFY SPOUSES BASED ON PREVIOUS YEAR ****
-****************************************************************
-
-use "${input_datapath}/indexevents_base_no2y.dta", clear	
-
-// real + placebo events 
-expand 2, gen(treated)
-replace file_year = file_year - 1 if treated == 0 
-replace eventdate_index = eventdate_index - 365 if treated == 0 
-	
-// merge spouses in year *prior* to event 
-gen year = file_year - 1 // note: this means the first event has to be in 2011 or later
-drop if year < 2010 // don't have spousal data for these 
-drop if treated == 1 & file_year == 2011 // need to drop these since they won't be in the control
-gen husbandid = ""
-
-	// merge on bene_id1 first
-	gen bene_id1 = index_id
-	merge m:1 bene_id1 year using "${input_datapath}/spousal_sample_tomerge.dta", keep(1 3) keepusing(bene_id* year)
-	replace husbandid = bene_id2 if _merge == 3
-	drop _merge bene_id*
-	
-	// merge on bene_id2 next
-	gen bene_id2 = index_id
-	merge m:1 bene_id2 year using "${input_datapath}/spousal_sample_tomerge.dta", keep(1 3) keepusing(bene_id* year)
-	replace husbandid = bene_id1 if _merge == 3
-	drop _merge bene_id* year 
-	
-// drop index folks without spouses
-drop if missing(husbandid) // about 65% are missing spouses here 
-rename husbandid response_id 
-egen hhid = group(index_id response_id treated)
-compress
-save "${input_datapath}/indexevents_mergedspouses_no2y.dta", replace // should be about 1.2M observations with spouses identified 
-*******************************************************
-
-
-****************************************************************
-**** SECOND, REQUIRE CONTINUOUS ENROLLMENT OF BOTH SPOUSES  ****
-****************************************************************
-
 // note: this requires spouses to be continuously enrolled between t=-1 and (real or placebo) event 
 // so one year pre and post for a true event, and one year pre and post for placebo event 
 
-// make list of bene_id and years
-use "${input_datapath}/indexevents_mergedspouses_no2y.dta", clear
-expand 3
-gen eventyear = file_year
-bys index_id response_id: replace file_year = file_year - 1 if _n == 2
-bys index_id response_id: replace file_year = file_year - 2 if _n == 3 // do we need this? 
-save "${input_datapath}/indexevents_mergedspouses_no2y.dta", replace
-
-
-// note: this requires spouses to be continuously enrolled between t=-1 and (real or placebo) event 
-// so one year pre and post for a true event, and one year pre and post for placebo event 
-
-use "${input_datapath}/indexevents_mergedspouses_no2y.dta", clear
+use "${input_datapath}/indexevents_mergedspouses.dta", clear
 preserve
 keep index_id file_year
 duplicates drop
@@ -164,7 +75,7 @@ forvalues yr = 2009/2016 { // if not requiring two years pre, then this isn't 20
 	save `myhusbands_`yr'', replace
 }
 
-use "${input_datapath}/indexevents_mergedspouses_no2y.dta", clear
+use "${input_datapath}/indexevents_mergedspouses.dta", clear
 drop if file_year >= 2017 // don't have data for these years, and they shouldn't be index events anyway.
 gen w_elig = 0
 gen h_elig = 0
@@ -186,22 +97,36 @@ duplicates drop // we have ~1.2M events
 
 egen eventid = group(index_id response_id eventdate_index treated)
 compress
-save "${input_datapath}/indexevents_mergedspouses_eligible__no2y.dta", replace
+save "${input_datapath}/indexevents_mergedspouses_eligible_me.dta", replace
 ********************************************************************************
 
 
 ***** Make the panel 
-use  "${input_datapath}/indexevents_mergedspouses_eligible__no2y.dta", clear
-bys response_id treated: keep if _n == 1 // drops 1.2% of events (18,233)
-gen bene_id = response_id
-save "${input_datapath}/indexevents_mergedspouses_eligible__no2y.dta", replace
+// merge is a bit more complicated since we now have multiple events 
+use "${input_datapath}/indexevents_mergedspouses_eligible_me.dta", clear 
+bys index_id response_id treated: gen test = _n
+keep response_id index_id eventid treated eventdate_index test
+duplicates drop
+
+// reshape here 
+reshape wide eventdate_index, i(index_id response_id eventid treated) j(test)
+gen bene_id = response_id 
+bys bene_id treated: keep if _n == 1 // drops < 1% of sample
+tempfile tomerge
+save `tomerge', replace
 
 // merge in response events
 use "${input_datapath}/responseevents-MEDPAR.dta", clear
 expand 2, generate(treated)
-merge m:1 bene_id treated using "${input_datapath}/indexevents_mergedspouses_eligible__no2y.dta", keep(3) nogenerate
+merge m:1 bene_id treated using `tomerge', keep(3) nogenerate
 // drop if ext_injury == 1 // for replication 
 drop bene_id
+
+// reshape back 
+bys index_id response_id eventid treated response_eventdt: gen i = _n
+reshape long eventdate_index, i(index_id response_id eventid treated response_eventdt i) j(j)
+drop if missing(eventdate_index)
+drop i j 
 gen elapse = response_eventdt - eventdate_index
 
 // count these as absorbing across multiple dates of admission
@@ -218,21 +143,21 @@ gen reltime_weeks = floor(elapse/7)
 // save by weeks
 keep if abs(elapse) <= 400 
 
-gcollapse (max) snf* hosp* fem ext_injury, ///
+gcollapse (max) snf* hosp* fem, ///
 	by(response_id index_id eventid reltime_weeks treated) fast
 
-save "${input_datapath}/responseevents_panel_weeks_no2y.dta", replace // about 1.2M events
+save "${input_datapath}/responseevents_panel_weeks_me.dta", replace // about 1.2M events
 ********************************************************************************
 
 
 ***** Merge back in to header **************************************************
 // now merge in both treated and control groups
-use "${input_datapath}/indexevents_mergedspouses_eligible__no2y.dta", clear
+use "${input_datapath}/indexevents_mergedspouses_eligible_me.dta", clear
 cap drop bene_id 
 expand 105, gen(reltime_weeks)
 bysort eventid: replace reltime_weeks = _n - 53
 keep if inrange(reltime_weeks, -52, 52)
-merge 1:1 index_id response_id eventid reltime_weeks using "${input_datapath}/responseevents_panel_weeks_no2y.dta", keep(1 3) nogenerate
+merge 1:1 index_id response_id eventid reltime_weeks using "${input_datapath}/responseevents_panel_weeks_me.dta", keep(1 3) nogenerate
 
 // keep only opposite-sex pairs
 bys index_id response_id treated: ereplace fem = max(fem)
@@ -241,7 +166,7 @@ drop if fem == 1 & index_fem == 1
 drop if fem == 0 & index_fem == 0 
 drop fem // drops ~2% of sample
 
-foreach v of var hosp* snf* fatal* nonfatal*  { // mdc* adrd* iez* { 
+foreach v of var hosp* snf*  { // mdc* adrd* iez* { 
 	replace `v' = 0 if missing(`v')
 }
 
@@ -254,7 +179,103 @@ drop if treated == 1 & file_year == 2017 // can keep this year for control group
 // drop bene_id
 
 compress
-save "${input_datapath}/weekpanel_no2y.dta", replace // should have about 113M observations
+save "${input_datapath}/weekpanel_me.dta", replace // should have about 113M observations
+********************************************************************************/
+
+cap gen bene_id = response_id 
+
+/* For each bene_id reltime_week pair, generate new column "snf_mds" that 
+   is 1 if in SNF and 0 otherwise. Match back to main dataset. */
+
+// save "${input_datapath}/weekpanel_backup.dta", replace
+  
+preserve
+
+// Quick reformatting
+keep bene_id eventdate_index reltime_weeks snf
+
+// Merge with MDS stays so each bene_id reltime_week pair has new columns
+// entry_dt_ext and dschrg_dt_ext for each MDS SNF visit bene_id has.
+joinby bene_id using "${input_datapath}/MDS-stays.dta", unmatched(master)
+
+
+// Check if bene_id reltime_week pair is within entry_dt_ext and 
+// dschrg_dt_ext
+gen day = eventdate_index + 7*reltime_weeks 
+format day %td
+gen snf_mds = 0
+forvalues D = 0/6 {
+	replace snf_mds = inrange(day+`D', entry_dt_ext , dschrg_dt_ext) ///
+	if snf_mds == 0 /// only add (since they might be in snf on day 0 but not day 1)
+	& !missing(entry_dt_ext) // stata inrange treats . as -inf and + inf
+}	
+		
+
+// New SNF outcome: entry into SNF
+gen snf_mds_entry = 0
+bysort bene_id eventdate_index entry_dt_ext (reltime_weeks): ///
+	replace snf_mds_entry = 1 ///
+	if (snf_mds == 1 ///
+	   & snf_mds[_n-1] == 0 ///
+	   & _n > 1) ///
+	| (snf_mds == 1 & ///
+	  (day-7 <= entry_dt_ext) /// not within the visit a week ago
+	  & _n == 1)
+	
+	
+/* Checks */
+	assert snf_mds == 0 & snf_mds_entry == 0 ///
+		if missing(entry_dt_ext)
+	
+	assert entry_dt_ext <= dschrg_dt_ext ///
+		if !missing(entry_dt_ext)
+
+	assert snf_mds == 1 ///
+		if snf_mds_entry == 1
+	
+// Each bene_id is duplicated the number of stays they've had so collapse 
+// to bene_id reltime_week level and take the max 
+collapse (max) snf snf_mds snf_mds_entry, ///
+	by(bene_id eventdate_index reltime_weeks)
+
+	
+// New SNF outcome: in MDS but not in Medpar
+gen snf_mds_only = (snf_mds == 1 & snf == 0)
+
+
+/* Checks */
+	
+	// Weekly match rate should be about 94.5% (last checked)
+	qui sum snf_mds if snf == 1
+	local mu = r(mean)
+	cap assert `mu' >= 0.945
+	if _rc {
+		dis "match rate is `mu'"
+		error 9
+	}
+
+// Save dataset with new columns
+tempfile snf_mds_months
+save "${input_datapath}/snf_mds_months.dta", replace
+restore
+
+// Merge main panel with new columns 
+merge m:1 bene_id eventdate_index reltime_weeks using "${input_datapath}/snf_mds_months.dta", nogen
+
+
+// Indicator for if outcome spouse dies within a year of shock
+cap drop bene_id
+gen bene_id = response_id 
+merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
+
+gen test = death_dt - eventdate_index
+gen nosurvive = (!missing(death_dt) & test <= 365)
+bys index_id response_id: ereplace nosurvive = max(nosurvive) 
+drop test 
+
+compress
+save "${input_datapath}/weekpanel_me.dta", replace 
+
 ********************************************************************************/
 
 	
@@ -264,12 +285,7 @@ save "${input_datapath}/weekpanel_no2y.dta", replace // should have about 113M o
 // drop if todrop == 1 
 // drop todrop 
 
-	use "${input_datapath}/weekpanel_no2y.dta" , clear 
-	
-	// keep only households where outcome spouse lives for at least a year post-event
-cap drop bene_id
-gen bene_id = response_id 
-merge m:1 bene_id using "${input_datapath}/mortality.dta", keep(1 3) nogenerate
+use "${input_datapath}/weekpanel_me.dta" , clear 
 	
 	
 // aggregate to monthly level 
@@ -286,27 +302,22 @@ gen tt = reltime_months + 4 // makes regression code easier to have no negative 
 keep if inrange(reltime_months, -5, 12) 
 replace tt = 3 if reltime_months <= -5 // additional reference points
 
-
 // keep only households where outcome spouse lives for at least a year post-event
-gen test = death_dt - eventdate_index
-gen todrop = (!missing(death_dt) & test <= 365)
-bys index_id response_id: ereplace todrop = max(todrop) 
-drop if todrop == 1
-drop test todrop
+drop if nosurvive == 1
 
-	gcollapse (max) snf treated* index_fem, by(index_id hhid eventid ym tt reltime_months ) fast
+gcollapse (max) `1' treated* index_fem, by(index_id hhid eventid ym tt reltime_months ) fast
 
-sum snf if (treated == 1 & reltime_ < 0) // | treated == 0 
+sum `1' if (treated == 1 & reltime_ < 0) // | treated == 0 
 local premean: di %5.4fc `r(mean)'
 local textmean: di %3.1fc `r(mean)' * 1000
-replace snf = snf / `premean' // * 100 // rescale coefficients to be % of outcome
+replace `1' = `1' / `premean' // * 100 // rescale coefficients to be % of outcome
 
 // gen test = runiform() 
 // bys index_id: ereplace test = mean(test) 
 // keep if (test < .5 & treated == 0) | (test >= .5 & treated == 1)
 
 // run regression
-reghdfe snf ib3.tt##i.treated, ///
+reghdfe `1' ib3.tt##i.treated, ///
 	absorb(eventid ym) cluster(hhid)
 
 // make figure			
@@ -333,7 +344,7 @@ twoway (rcap ci_lower ci_upper reltime, color(gs10)) (scatter coef reltime, colo
 	xsc(r(-4(2)12)) xlab(-4(2)12) ///
 	subtitle("Spillover Effect, Relative to Baseline Mean (`textmean'/1,000)", ///
 		position(11) justification(left) size(medsmall)) 
-graph save "${hoaglandoutput}/EventStudy_snf-no2y_$today.gph", replace
-graph export "${hoaglandoutput}/EventStudy_snf-no2y_$today.png", as(png) replace
-graph export "${hoaglandoutput}/EventStudy_snf-no2y_$today.pdf", as(pdf) replace
+graph save "${hoaglandoutput}/EventStudy_`1'-extraevents_$today.gph", replace
+graph export "${hoaglandoutput}/EventStudy_`1'-extraevents_$today.png", as(png) replace
+graph export "${hoaglandoutput}/EventStudy_`1'-extraevents_$today.pdf", as(pdf) replace
 ********************************************************************************
